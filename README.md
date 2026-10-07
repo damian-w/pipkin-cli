@@ -27,10 +27,15 @@ Windows PowerShell:
 irm https://pipkin.io/install.ps1 | iex
 ```
 
-Installation starts Pipkin in the background and at sign-in. On macOS, choose
-**Always Allow** if Keychain asks for access to Claude's saved sign-in. Unsigned
-updates may ask again. On Unix, add `~/.local/bin` to your PATH if needed; on
-Windows, open a new terminal. Linux may need serial-port group access.
+Installation starts Pipkin in the background and at sign-in. On Unix, add
+`~/.local/bin` to your PATH if needed; on Windows, open a new terminal. Linux may
+need serial-port group access.
+
+On macOS, installation and CLI updates may ask for access to Claude's saved
+sign-in. The newly installed helper requests permission before it starts in the
+background. Choose **Always Allow** if Keychain asks. If access is blocked or you
+cancel, run `pipkin authorize`, then `pipkin restart` to retry. Updates started by
+CLI 1.1.0 or earlier may need this manual recovery.
 
 ## Use
 
@@ -38,6 +43,7 @@ Windows, open a new terminal. Linux may need serial-port group access.
 pipkin usage         # Read usage now
 pipkin usage --json  # All metrics for integrations
 pipkin status        # Check the helper and USB display
+pipkin restart       # Restart the background helper
 pipkin update        # Update the CLI
 pipkin flash         # Install or update display firmware
 pipkin uninstall     # Remove Pipkin
@@ -52,8 +58,8 @@ and reset information. See the [JSON output reference](docs/output.md) for the f
 metric set and the separate [display protocol](docs/protocol.md).
 
 Credentials stay local except for direct requests to their provider. No telemetry.
-If a sign-in expires, open the provider's app. Run `pipkin authorize` if macOS
-Keychain access is blocked. See [data sources and limitations](docs/data-sources.md).
+If a sign-in expires, open the provider's app. See
+[data sources and limitations](docs/data-sources.md).
 
 ## Display firmware
 

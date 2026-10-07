@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,11 +14,15 @@ import (
 func recordingHandlers(calls *int) cliHandlers {
 	call := func() error { *calls++; return nil }
 	withArgs := func([]string) error { return call() }
-	return cliHandlers{withArgs, call, call, call, call, call, call, call, withArgs, call, withArgs}
+	return cliHandlers{
+		usage: withArgs, authorize: call, status: call, statusJSON: call,
+		start: call, stop: call, restart: call, update: call, uninstall: call,
+		install: withArgs, run: call, flash: withArgs,
+	}
 }
 
 func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "update", "uninstall", "install", "run", "version", "license"} {
+	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
 		for _, option := range []string{"--dry-run", "--json --extra"} {
 			calls := 0
 			code, err := dispatch([]string{command, option}, "test", "", "", io.Discard, recordingHandlers(&calls))
@@ -29,7 +34,7 @@ func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
 }
 
 func TestCLIHelpHasNoCommandSideEffects(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "update", "uninstall", "install", "run", "version", "license"} {
+	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
 		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
 			var output bytes.Buffer
 			calls := 0
@@ -37,6 +42,62 @@ func TestCLIHelpHasNoCommandSideEffects(t *testing.T) {
 			if code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "pipkin "+command) {
 				t.Fatalf("%v: code=%d error=%v calls=%d output=%q", args, code, err, calls, output.String())
 			}
+		}
+	}
+}
+
+func TestCLIUsageListsCommandsForPlatform(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			menu := formatCLIUsage("test", goos)
+			if strings.Contains(menu, "\n  authorize ") != (goos == "darwin") {
+				t.Fatalf("incorrect authorize visibility on %s: %q", goos, menu)
+			}
+			for _, command := range []string{"usage", "status", "start", "stop", "restart", "update", "flash", "uninstall", "install", "version", "license"} {
+				if !strings.Contains(menu, "\n  "+command+" ") {
+					t.Fatalf("%s missing from %s command menu: %q", command, goos, menu)
+				}
+			}
+		})
+	}
+}
+
+func TestCLIGeneralHelpAndUnknownCommandUsePlatformMenu(t *testing.T) {
+	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"-h"}, {"unknown"}} {
+		var output bytes.Buffer
+		calls := 0
+		code, err := dispatch(args, "test", "", "", &output, recordingHandlers(&calls))
+		menu := output.String()
+		if len(args) > 0 && args[0] == "unknown" {
+			if code != 2 || err == nil {
+				t.Fatalf("unknown command: code=%d error=%v", code, err)
+			}
+			menu = err.Error()
+		} else if code != 0 || err != nil {
+			t.Fatalf("%v: code=%d error=%v", args, code, err)
+		}
+		if calls != 0 || !strings.Contains(menu, "Pipkin display helper test") || !strings.Contains(menu, "\n  restart ") {
+			t.Fatalf("%v: calls=%d menu=%q", args, calls, menu)
+		}
+		if strings.Contains(menu, "\n  authorize ") != (runtime.GOOS == "darwin") {
+			t.Fatalf("%v: incorrect authorize visibility on %s: %q", args, runtime.GOOS, menu)
+		}
+	}
+}
+
+func TestCLIRoutesRestartAndReportsFailures(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	boom := errors.New("restart failed")
+	for _, result := range []error{nil, boom} {
+		calls := 0
+		handlers := cliHandlers{restart: func() error { calls++; return result }}
+		code, err := dispatch([]string{"restart"}, "test", "", "", io.Discard, handlers)
+		wantCode := 0
+		if result != nil {
+			wantCode = 1
+		}
+		if calls != 1 || !errors.Is(err, result) || code != wantCode {
+			t.Fatalf("restart: code=%d error=%v calls=%d result=%v", code, err, calls, result)
 		}
 	}
 }

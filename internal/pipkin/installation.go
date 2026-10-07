@@ -308,7 +308,7 @@ type installationActions struct {
 
 func helperInstallationActions() installationActions {
 	return installationActions{running: runningPID, stop: stopHelper, start: startHelper,
-		register: registerAutostart, snapshot: snapshotAutostart}
+		register: registerAutostart, snapshot: snapshotAutostart, authorize: authorizeInstalledHelper}
 }
 
 func activateBinaries(staged *stagedBinaries, actions installationActions) (string, error) {

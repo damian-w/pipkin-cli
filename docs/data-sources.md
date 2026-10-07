@@ -15,11 +15,14 @@ local subscription sign-in and configured credential store. API keys are not use
 for subscription readings.
 
 On macOS, installation may ask for Keychain permission to read Claude's saved
-sign-in. Choose **Always Allow** for background access. You can also run
-`pipkin authorize` explicitly. Routine background reads do not open permission
-dialogs. Linux credential-store access requires an already unlocked Secret
-Service store; basic storage and auth files do not. Windows uses the current
-user's credential storage.
+sign-in. CLI updates started by version 1.2.0 or later also check this permission
+from the newly installed executable before restarting the background helper.
+Choose **Always Allow** for background access. If access is blocked or you cancel,
+run `pipkin authorize`, then `pipkin restart` to retry. Updates started by an older
+CLI may need this manual recovery.
+Routine background reads do not open permission dialogs. Linux credential-store
+access requires an already unlocked Secret Service store; basic storage and auth
+files do not. Windows uses the current user's credential storage.
 
 The provider apps manage their own sign-ins. If a session expires, open the
 provider's app to renew it. Pipkin does not refresh or replace their credentials.

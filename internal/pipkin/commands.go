@@ -3,6 +3,7 @@ package pipkin
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -97,15 +98,6 @@ func installCommand(args []string) error {
 			return os.Remove(launcherPath())
 		}
 		return nil
-	}
-	actions.authorize = func() {
-		if runtime.GOOS == "darwin" && claudeDesktopSignedIn() {
-			command := exec.Command(installedBinary(), "authorize")
-			command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-			if command.Run() != nil {
-				fmt.Println("Claude permission is not ready; run `pipkin authorize` after opening Claude Desktop.")
-			}
-		}
 	}
 	mechanism, err := activateBinaries(staged, actions)
 	if err != nil {
@@ -247,6 +239,57 @@ func stopCommand() error {
 	}
 	fmt.Println("Pipkin helper stopped. It starts again at next sign-in; `pipkin start` resumes now.")
 	return nil
+}
+
+func restartCommand() error {
+	lock, err := acquireFileLock(installationLockPath())
+	if err != nil {
+		return fmt.Errorf("could not restart the helper during another installation or firmware operation: %w", err)
+	}
+	defer lock.Close()
+	if _, err := os.Stat(installedBinary()); err != nil {
+		return errors.New("Pipkin is not installed")
+	}
+	maintenance, err := acquireFileLock(maintenanceLockPath())
+	if err != nil {
+		return fmt.Errorf("could not restart the helper while firmware maintenance is in progress: %w", err)
+	}
+	// runCommand needs this lock before it can publish the new helper's PID.
+	if err := maintenance.Close(); err != nil {
+		return err
+	}
+	if err := restartHelper(stopHelper, startHelper); err != nil {
+		return err
+	}
+	fmt.Println("Pipkin helper restarted.")
+	return nil
+}
+
+func restartHelper(stop, start func() error) error {
+	if err := stop(); err != nil {
+		return fmt.Errorf("could not stop the helper for restart: %w", err)
+	}
+	if err := start(); err != nil {
+		return fmt.Errorf("could not restart the helper; run pipkin start to try again: %w", err)
+	}
+	return nil
+}
+
+func authorizeInstalledHelper() {
+	authorizeInstalledHelperFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, os.Stdout)
+}
+
+func authorizeInstalledHelperFor(goos string, signedIn func() bool, run func(*exec.Cmd) error, output io.Writer) {
+	if goos != "darwin" || !signedIn() {
+		return
+	}
+	// The updater is still the old executable. Keychain permission must be given
+	// to the replacement at its final path, before its first background read.
+	command := exec.Command(installedBinary(), "authorize")
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, output, os.Stderr
+	if run(command) != nil {
+		fmt.Fprintln(output, "Claude permission is not ready; run pipkin authorize, then pipkin restart to try again.")
+	}
 }
 
 var httpClient = &http.Client{Timeout: 60 * time.Second}
