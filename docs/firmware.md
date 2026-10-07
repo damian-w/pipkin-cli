@@ -9,9 +9,9 @@ updates the CLI, while `pipkin flash` updates the display.
 
 The current firmware uses one profile for **ESP32 CYD 2.8-inch touch boards with
 4 MB flash**. Equivalently wired ESP32-S and WROOM boards use the same profile;
-their printed model labels do not need to match exactly. The profile is provisional:
-display, touch and USB flashing across supported platforms still need full qualification
-on physical boards.
+their printed model labels do not need to match exactly. First installation,
+settings-preserving updates, USB reset and display/touch operation have been tested
+on a physical CYD board on macOS.
 Check the PCB model and components against the
 [board profile](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profile).
 The firmware's current wiring and display/touch drivers determine compatibility,

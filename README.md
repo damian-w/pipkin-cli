@@ -71,8 +71,7 @@ Confirm that it is the intended ESP32 CYD 2.8-inch touch board.
 
 The current release targets **ESP32 CYD 2.8-inch touch boards with 4 MB flash**
 matching the firmware profile. Equivalent ESP32-S and WROOM boards use the same
-profile; their printed model labels do not need to match exactly. The profile is
-provisional and still needs hardware qualification. See the
+profile; their printed model labels do not need to match exactly. See the
 [board guide](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profile).
 
 No ESP-IDF or Python setup is needed: the CLI downloads and caches the pinned
