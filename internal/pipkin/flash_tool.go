@@ -377,7 +377,8 @@ func sameToolFiles(source, destination string, asset flashToolAsset) bool {
 		if err != nil || !bytes.Equal(original, current) {
 			return false
 		}
-		if name == "esptool" && info.Mode().Perm()&0o100 == 0 {
+		// Windows does not expose Unix execute permissions in FileMode.
+		if runtime.GOOS != "windows" && name == "esptool" && info.Mode().Perm()&0o100 == 0 {
 			return false
 		}
 	}

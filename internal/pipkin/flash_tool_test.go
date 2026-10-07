@@ -152,6 +152,30 @@ func TestFlashToolArchiveExtraction(t *testing.T) {
 	}
 }
 
+func TestFlashToolCacheChecksExecutablePermissionsOnUnix(t *testing.T) {
+	asset := flashToolAsset{Platform: "linux-amd64"}
+	source, cached := t.TempDir(), t.TempDir()
+	for _, directory := range []string{source, cached} {
+		for name, data := range map[string]string{"esptool": "tool", "LICENSE": "GPL-2.0-or-later", "README.md": "upstream"} {
+			if err := os.WriteFile(filepath.Join(directory, name), []byte(data), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Chmod(filepath.Join(cached, "esptool"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sameToolFiles(source, cached, asset), runtime.GOOS == "windows"; got != want {
+		t.Fatalf("cache with no Unix executable bit matches = %v, want %v on %s", got, want, runtime.GOOS)
+	}
+	if err := os.Chmod(filepath.Join(cached, "esptool"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !sameToolFiles(source, cached, asset) {
+		t.Fatal("cache with executable permissions did not match")
+	}
+}
+
 func TestFlashToolArchiveRejectsUnsafePathsAndMissingLicense(t *testing.T) {
 	for _, suffix := range []string{".tar.gz", ".zip"} {
 		for _, name := range []string{"../esptool", "/esptool", "esptool-linux-amd64/../../outside", "esptool-linux-amd64/..\\outside", "C:/esptool", "esptool-linux-amd64/./esptool", "esptool-linux-amd64/../esptool-linux-amd64"} {
