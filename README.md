@@ -27,27 +27,16 @@ Windows PowerShell:
 irm https://pipkin.io/install.ps1 | iex
 ```
 
-Installation starts Pipkin in the background and at sign-in. On Unix, add
-`~/.local/bin` to your PATH if needed; on Windows, open a new terminal. Linux may
-need serial-port group access.
+Pipkin runs in the background and starts automatically at sign-in. Connect your
+display with a USB data cable. On Windows, open a new terminal after installing;
+on macOS and Linux, add `~/.local/bin` to your PATH if needed.
 
-The display follows computer sleep, resume and shutdown. macOS and Windows also
-follow screen sleep, including macOS's **Put Display to Sleep** Hot Corner. Linux
-requires systemd-logind for host power notifications. On macOS and Windows, Pipkin
-remains dark during background wakes while the screens are asleep. It reconnects
-automatically on resume or at sign-in. Closing a laptop lid while the system and an
-external display remain awake keeps Pipkin awake. Automatic startup before sign-in
-is not provided.
+The display sleeps and wakes with your computer and reconnects automatically.
+On macOS and Windows, it also follows screen sleep.
 
-With matching display firmware, a missed system-sleep/shutdown report or stopped
-helper is covered by a 90-second heartbeat timeout. Waking lights the display
-immediately while fresh usage loads.
-
-On macOS, installation and CLI updates may ask for access to Claude's saved
-sign-in. The newly installed helper requests permission before it starts in the
-background. Choose **Always Allow** if Keychain asks. If access is blocked or you
-cancel, run `pipkin authorize`, then `pipkin restart` to retry. Updates started by
-CLI 1.1.0 or earlier may need this manual recovery.
+On macOS, choose **Always Allow** if Keychain asks for access to Claude's saved
+sign-in. See the [sign-in guide](docs/data-sources.md#existing-sign-ins) if you need
+help with permissions.
 
 ## Use
 
@@ -75,30 +64,17 @@ If a sign-in expires, open the provider's app. See
 
 ## Display firmware
 
-For a self-built board, or to update a Pipkin kit, connect it by USB and run:
+To set up a self-built display or update your Pipkin, connect it by USB and run:
 
 ```sh
 pipkin flash
 ```
 
-Pipkin checks the connected board and its current firmware, shows the latest stable
-firmware release from [damian-w/pipkin](https://github.com/damian-w/pipkin/releases),
-and asks for yes/no confirmation before writing. Pressing Enter means no. It
-distinguishes running firmware from a stored Pipkin version that is not responding.
-Confirm that it is the intended ESP32 CYD 2.8-inch touch board.
+Pipkin downloads the latest stable firmware and asks you to confirm before
+installing it. No extra software setup is needed.
 
-The current release targets **ESP32 CYD 2.8-inch touch boards with 4 MB flash**
-matching the firmware profile. Equivalent ESP32-S and WROOM boards use the same
-profile; their printed model labels do not need to match exactly. See the
-[board guide](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profile).
-
-No ESP-IDF or Python setup is needed: the CLI downloads and caches the pinned
-Espressif flashing tool. Firmware and tool downloads come from GitHub. `pipkin flash`
-requires CLI **1.1.0 or later**; run `pipkin update` if you have the initial release.
-Kit setup still just needs the CLI and USB cable.
-
-See the [firmware guide](docs/firmware.md) for port selection, specific releases and
-USB recovery, or [build the firmware from source](https://github.com/damian-w/pipkin/blob/main/docs/development.md).
+See the [firmware guide](docs/firmware.md) for supported boards, advanced options
+and troubleshooting.
 
 ## Build from source
 

@@ -63,6 +63,11 @@ func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential
 		}
 		return nil, errors.New("Claude Desktop account identity could not be verified")
 	}
+	if credential.source == "claude-desktop" && credential.desktopDir != "" {
+		if err := validateClaudeDesktopIdentity(ctx, credential); err != nil {
+			return nil, err
+		}
+	}
 	if identity == "" {
 		identity = credential.AccessToken
 	}

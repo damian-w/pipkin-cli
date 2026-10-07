@@ -14,6 +14,16 @@ sign-in can be used when no Desktop sign-in is available. Codex uses its existin
 local subscription sign-in and configured credential store. API keys are not used
 for subscription readings.
 
+On Windows, a running Claude Desktop can exclusively lock its cookie database.
+When its active-organization cookie is missing or inaccessible, Pipkin can infer
+an organization only if its saved Desktop token caches contain exactly one
+organization for the selected account. Expired entries and deleted-token markers
+still count when checking for ambiguity. Pipkin verifies the token's account and
+organization with Claude before reporting usage and rechecks saved Desktop state.
+Multiple cached organizations remain unavailable without a readable selection
+cookie. This fallback verifies the credential's identity; it cannot detect a GUI
+organization switch that Claude has not yet saved in its token caches.
+
 On macOS, installation may ask for Keychain permission to read Claude's saved
 sign-in. CLI updates started by version 1.2.0 or later also check this permission
 from the newly installed executable before restarting the background helper.

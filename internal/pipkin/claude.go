@@ -29,6 +29,7 @@ type claudeCredential struct {
 	Plan             string   `json:"subscriptionType"`
 	Scopes           []string `json:"scopes"`
 	source, identity string
+	desktopDir       string
 }
 
 type claudeDesktopConfig struct {
@@ -111,43 +112,7 @@ func loadClaudeCredential(ctx context.Context) (claudeCredential, error) {
 		if !config.signedIn() {
 			continue
 		}
-		decrypt, err := claudeDecryptor(ctx, dir)
-		if err != nil {
-			return zero, err
-		}
-		org, err := claudeActiveOrg(ctx, dir, decrypt)
-		if err != nil {
-			return zero, err
-		}
-		account := config.AccountUUID
-		if !validClaudeUUID(account) {
-			return zero, errors.New("Claude Desktop's active account is unavailable; open Claude Desktop")
-		}
-		var caches [2]map[string]json.RawMessage
-		for i, raw := range []json.RawMessage{config.TokenCacheV2, config.TokenCache} {
-			if !claudeCachePresent(raw) {
-				continue
-			}
-			var encoded string
-			if json.Unmarshal(raw, &encoded) != nil {
-				return zero, errors.New("Claude Desktop token cache is invalid")
-			}
-			encrypted, err := base64.StdEncoding.DecodeString(encoded)
-			if err != nil {
-				return zero, errors.New("Claude Desktop token cache is invalid")
-			}
-			clear, err := decrypt(encrypted)
-			if err != nil {
-				return zero, err
-			}
-			if json.Unmarshal(clear, &caches[i]) != nil {
-				return zero, errors.New("Claude Desktop token cache is invalid")
-			}
-		}
-		credential, err := selectClaudeDesktopToken(caches[0], caches[1], account, org, time.Now())
-		credential.source = "claude-desktop"
-		credential.identity = strings.ToLower(account) + "|" + org
-		return credential, err
+		return loadClaudeDesktopCredential(ctx, dir, config)
 	}
 	if runtime.GOOS == "darwin" {
 		service := "Claude Code-credentials"
@@ -175,6 +140,84 @@ func loadClaudeCredential(ctx context.Context) (claudeCredential, error) {
 	return parseClaudeCodeCredential(raw, "claude-auth-file")
 }
 
+func loadClaudeDesktopCredential(ctx context.Context, dir string, config claudeDesktopConfig) (claudeCredential, error) {
+	if err := ctx.Err(); err != nil {
+		return claudeCredential{}, err
+	}
+	account := config.AccountUUID
+	if !validClaudeUUID(account) {
+		return claudeCredential{}, errors.New("Claude Desktop's active account is unavailable; open Claude Desktop")
+	}
+	decrypt, err := claudeDecryptor(ctx, dir)
+	if err != nil {
+		return claudeCredential{}, err
+	}
+	caches, err := decodeClaudeDesktopCaches(config, decrypt)
+	if err != nil {
+		return claudeCredential{}, err
+	}
+	org, err := resolveClaudeDesktopOrg(ctx, dir, decrypt, caches[0], caches[1], account, runtime.GOOS == "windows")
+	if err != nil {
+		return claudeCredential{}, err
+	}
+	credential, err := selectClaudeDesktopToken(caches[0], caches[1], account, org, time.Now())
+	credential.source = "claude-desktop"
+	credential.identity = strings.ToLower(account) + "|" + org
+	if runtime.GOOS == "windows" {
+		credential.desktopDir = dir
+	}
+	return credential, err
+}
+
+func decodeClaudeDesktopCaches(config claudeDesktopConfig, decrypt func([]byte) ([]byte, error)) ([2]map[string]json.RawMessage, error) {
+	var caches [2]map[string]json.RawMessage
+	for i, raw := range []json.RawMessage{config.TokenCacheV2, config.TokenCache} {
+		if !claudeCachePresent(raw) {
+			continue
+		}
+		var encoded string
+		if json.Unmarshal(raw, &encoded) != nil {
+			return caches, errors.New("Claude Desktop token cache is invalid")
+		}
+		encrypted, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return caches, errors.New("Claude Desktop token cache is invalid")
+		}
+		clear, err := decrypt(encrypted)
+		if err != nil {
+			return caches, err
+		}
+		if json.Unmarshal(clear, &caches[i]) != nil {
+			return caches, errors.New("Claude Desktop token cache is invalid")
+		}
+	}
+	return caches, nil
+}
+
+// Profile verifies the token's owner, not GUI selection. Recheck persisted
+// Desktop state before publishing Windows readings, including inferred orgs.
+func validateClaudeDesktopIdentity(ctx context.Context, credential claudeCredential) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	config, err := readClaudeDesktopConfig(credential.desktopDir)
+	if err != nil || !config.signedIn() {
+		return fmt.Errorf("Claude Desktop sign-in changed while reading usage; retry: %w", errSignedOut)
+	}
+	account, _, _ := strings.Cut(credential.identity, "|")
+	if !strings.EqualFold(config.AccountUUID, account) {
+		return fmt.Errorf("Claude Desktop account changed while reading usage; retry: %w", errSignedOut)
+	}
+	current, err := loadClaudeDesktopCredential(ctx, credential.desktopDir, config)
+	if err != nil {
+		return err
+	}
+	if current.identity != credential.identity {
+		return fmt.Errorf("Claude Desktop organization changed while reading usage; retry: %w", errSignedOut)
+	}
+	return nil
+}
+
 func parseClaudeCodeCredential(raw []byte, source string) (claudeCredential, error) {
 	var file struct {
 		OAuth claudeCredential `json:"claudeAiOauth"`
@@ -193,12 +236,75 @@ func parseClaudeCodeCredential(raw []byte, source string) (claudeCredential, err
 	return c, nil
 }
 
+var (
+	errClaudeOrgMissing    = errors.New("Claude Desktop's active organization is unavailable; open Claude Desktop")
+	errClaudeOrgUnreadable = errors.New("Claude Desktop's active organization cannot be read")
+	errClaudeOrgInvalid    = errors.New("Claude Desktop's active organization cookie is invalid")
+	errClaudeOrgStorage    = errors.New("Claude Desktop's cookie database could not be read or queried")
+	errClaudeOrgAmbiguous  = errors.New("Claude Desktop's active organization is unavailable: multiple organizations are cached and its cookie cannot be read")
+)
+
+func resolveClaudeDesktopOrg(ctx context.Context, dir string, decrypt func([]byte) ([]byte, error), v2, v1 map[string]json.RawMessage, account string, allowCacheFallback bool) (string, error) {
+	org, err := claudeActiveOrg(ctx, dir, decrypt)
+	if err == nil || !allowCacheFallback || (!errors.Is(err, errClaudeOrgMissing) && !errors.Is(err, errClaudeOrgUnreadable)) {
+		return org, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	// Count every represented org, including expired entries and tombstones.
+	// Token validity, scopes and cache ordering do not identify GUI selection.
+	orgs := make(map[string]bool)
+	for _, cache := range []map[string]json.RawMessage{v2, v1} {
+		for _, entry := range normalizedClaudeCache(cache, account) {
+			orgs[entry.key.org] = true
+		}
+	}
+	if len(orgs) > 1 {
+		return "", errClaudeOrgAmbiguous
+	}
+	for inferred := range orgs {
+		return inferred, nil
+	}
+	return "", err
+}
+
 func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]byte, error)) (string, error) {
+	var unavailable, invalid error
+	record := func(err error) {
+		if errors.Is(err, errClaudeOrgUnreadable) {
+			if unavailable == nil {
+				unavailable = err
+			}
+		} else if invalid == nil {
+			invalid = err
+		}
+	}
 	for _, relative := range []string{"Cookies", filepath.Join("Network", "Cookies")} {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		path := filepath.Join(dir, relative)
-		if _, err := os.Stat(path); err != nil {
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		if err != nil {
+			record(claudeCookieReadError(err))
+			continue
+		}
+		if info.IsDir() {
+			record(errClaudeOrgStorage)
+			continue
+		}
+		// Preserve native sharing/access errors before SQLite reduces them to
+		// a generic cannot-open code. This does not override the owner's lock.
+		file, err := os.Open(path)
+		if err != nil {
+			record(claudeCookieReadError(err))
+			continue
+		}
+		file.Close()
 		uriPath := filepath.ToSlash(path)
 		if len(uriPath) > 1 && uriPath[1] == ':' {
 			uriPath = "/" + uriPath
@@ -206,17 +312,23 @@ func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]by
 		address := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
 		db, err := sql.Open("sqlite", address.String())
 		if err != nil {
+			record(errClaudeOrgStorage)
 			continue
 		}
 		rows, err := db.QueryContext(ctx, "SELECT host_key,value,encrypted_value FROM cookies WHERE name='lastActiveOrg' AND host_key IN ('.claude.ai','claude.ai') ORDER BY last_update_utc DESC")
 		if err != nil {
 			db.Close()
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			record(errClaudeOrgStorage)
 			continue
 		}
 		for rows.Next() {
 			var host, value string
 			var encrypted []byte
 			if rows.Scan(&host, &value, &encrypted) != nil {
+				record(errClaudeOrgStorage)
 				continue
 			}
 			if value == "" {
@@ -235,13 +347,30 @@ func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]by
 			if validClaudeUUID(value) {
 				rows.Close()
 				db.Close()
+				if err := ctx.Err(); err != nil {
+					return "", err
+				}
 				return strings.ToLower(value), nil
 			}
+			record(errClaudeOrgInvalid)
 		}
+		rowErr := rows.Err()
 		rows.Close()
 		db.Close()
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if rowErr != nil {
+			record(errClaudeOrgStorage)
+		}
 	}
-	return "", errors.New("Claude Desktop's active organization is unavailable; open Claude Desktop")
+	if invalid != nil {
+		return "", invalid
+	}
+	if unavailable != nil {
+		return "", unavailable
+	}
+	return "", errClaudeOrgMissing
 }
 
 func validClaudeUUID(s string) bool {
