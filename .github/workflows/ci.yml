@@ -11,15 +11,32 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+          - os: macos-15
+            arch: arm64
+          - os: windows-2025
+            arch: x64
+          - os: windows-11-arm
+            arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          architecture: ${{ matrix.arch }}
       - run: go test ./...
       - run: go vet ./...
+      - name: Official flashing tool smoke (no board required)
+        env:
+          PIPKIN_TOOL_SMOKE: "1"
+        run: go test ./internal/pipkin -run '^TestFlashToolOfficialSmoke$' -count=1 -timeout=8m
       - name: Unix installer checks
         if: runner.os != 'Windows'
         run: |

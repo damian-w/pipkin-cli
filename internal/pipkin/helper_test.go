@@ -416,3 +416,33 @@ func TestRunCommandReportsStalePIDRemovalFailure(t *testing.T) {
 		t.Fatalf("failed PID cleanup retained the instance lock: running=%t, err=%v", running, err)
 	}
 }
+
+func TestRunCommandRemovesPublishedPIDWhenMaintenanceCloseFails(t *testing.T) {
+	isolate(t)
+	closeFailure := errors.New("injected maintenance close failure")
+	releases := 0
+	err := runCommandWithMaintenanceRelease(func(file *os.File) error {
+		releases++
+		if _, err := readPIDRecord(); err != nil {
+			t.Fatalf("startup did not publish PID before releasing maintenance: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return closeFailure
+	})
+	if !errors.Is(err, closeFailure) || releases != 1 {
+		t.Fatalf("maintenance release = %d, %v", releases, err)
+	}
+	if _, err := os.Stat(pidPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed startup retained its published PID: %v", err)
+	}
+	if running, err := helperRunning(); err != nil || running {
+		t.Fatalf("failed startup retained the instance lock: %t, %v", running, err)
+	}
+	maintenance, err := acquireFileLock(maintenanceLockPath())
+	if err != nil {
+		t.Fatalf("failed startup retained the maintenance lock: %v", err)
+	}
+	maintenance.Close()
+}

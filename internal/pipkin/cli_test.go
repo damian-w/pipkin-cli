@@ -13,7 +13,7 @@ import (
 func recordingHandlers(calls *int) cliHandlers {
 	call := func() error { *calls++; return nil }
 	withArgs := func([]string) error { return call() }
-	return cliHandlers{withArgs, call, call, call, call, call, call, call, withArgs, call}
+	return cliHandlers{withArgs, call, call, call, call, call, call, call, withArgs, call, withArgs}
 }
 
 func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {

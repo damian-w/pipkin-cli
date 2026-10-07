@@ -38,7 +38,8 @@ Windows, open a new terminal. Linux may need serial-port group access.
 pipkin usage         # Read usage now
 pipkin usage --json  # All metrics for integrations
 pipkin status        # Check the helper and USB display
-pipkin update        # Install the latest release
+pipkin update        # Update the CLI
+pipkin flash         # Install or update display firmware
 pipkin uninstall     # Remove Pipkin
 ```
 
@@ -53,6 +54,34 @@ metric set and the separate [display protocol](docs/protocol.md).
 Credentials stay local except for direct requests to their provider. No telemetry.
 If a sign-in expires, open the provider's app. Run `pipkin authorize` if macOS
 Keychain access is blocked. See [data sources and limitations](docs/data-sources.md).
+
+## Display firmware
+
+For a self-built board, or to update a Pipkin kit, connect it by USB and run:
+
+```sh
+pipkin flash
+```
+
+Pipkin checks the connected board and its current firmware, shows the latest stable
+firmware release from [damian-w/pipkin](https://github.com/damian-w/pipkin/releases),
+and asks for yes/no confirmation before writing. Pressing Enter means no. It
+distinguishes running firmware from a stored Pipkin version that is not responding.
+Confirm that it is the intended ESP32 CYD 2.8-inch touch board.
+
+The current release targets **ESP32 CYD 2.8-inch touch boards with 4 MB flash**
+matching the firmware profile. Equivalent ESP32-S and WROOM boards use the same
+profile; their printed model labels do not need to match exactly. The profile is
+provisional and still needs hardware qualification. See the
+[board guide](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profile).
+
+No ESP-IDF or Python setup is needed: the CLI downloads and caches the pinned
+Espressif flashing tool. Firmware and tool downloads come from GitHub. `pipkin flash`
+requires CLI **1.1.0 or later**; run `pipkin update` if you have the initial release.
+Kit setup still just needs the CLI and USB cable.
+
+See the [firmware guide](docs/firmware.md) for port selection, specific releases and
+USB recovery, or [build the firmware from source](https://github.com/damian-w/pipkin/blob/main/docs/development.md).
 
 ## Build from source
 

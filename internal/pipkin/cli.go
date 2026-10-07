@@ -20,6 +20,7 @@ Commands:
   start       Start the helper now
   stop        Stop the helper until next sign-in
   update      Install the latest helper release
+  flash       Install or update display firmware (asks for confirmation)
   uninstall   Remove the helper and its settings
   install     Install or repair the helper
   version     Print the helper version
@@ -30,7 +31,7 @@ func Run(buildVersion, licenseText, thirdPartyNotices string) {
 	version = buildVersion
 	code, err := dispatch(os.Args[1:], buildVersion, licenseText, thirdPartyNotices, os.Stdout, cliHandlers{
 		usageCommand, authorizeCommand, statusCommand, statusJSONCommand, startCommand,
-		stopCommand, updateCommand, uninstallCommand, installCommand, runCommand,
+		stopCommand, updateCommand, uninstallCommand, installCommand, runCommand, flashCommand,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pipkin: %v\n", err)
@@ -51,6 +52,7 @@ type cliHandlers struct {
 	uninstall  func() error
 	install    func([]string) error
 	run        func() error
+	flash      func([]string) error
 }
 
 func dispatch(args []string, buildVersion, licenseText, notices string, output io.Writer, handlers cliHandlers) (int, error) {
@@ -64,6 +66,7 @@ func dispatch(args []string, buildVersion, licenseText, notices string, output i
 		"status": "pipkin status [--json]", "start": "pipkin start", "stop": "pipkin stop",
 		"update": "pipkin update", "uninstall": "pipkin uninstall", "install": "pipkin install",
 		"version": "pipkin version", "--version": "pipkin --version", "license": "pipkin license", "run": "pipkin run [--home DIR]",
+		"flash": "pipkin flash [--port PORT] [--version VERSION] [--reinstall]",
 	}
 	if command == "help" || command == "-h" || command == "--help" {
 		if len(args) == 1 {
@@ -87,7 +90,12 @@ func dispatch(args []string, buildVersion, licenseText, notices string, output i
 	}
 	jsonOption := len(options) == 1 && options[0] == "--json"
 	homeOption := command == "run" && len(options) == 2 && options[0] == "--home" && filepath.IsAbs(options[1])
-	if len(options) != 0 && !((command == "usage" || command == "status") && jsonOption) && !homeOption {
+	if command == "flash" {
+		if _, err := parseFlashOptions(options); err != nil {
+			return 1, fmt.Errorf("%w\nUsage: %s", err, syntax)
+		}
+	}
+	if len(options) != 0 && command != "flash" && !((command == "usage" || command == "status") && jsonOption) && !homeOption {
 		return 1, fmt.Errorf("usage: %s", syntax)
 	}
 	if homeOption {
@@ -126,6 +134,8 @@ func dispatch(args []string, buildVersion, licenseText, notices string, output i
 		err = handlers.stop()
 	case "update":
 		err = handlers.update()
+	case "flash":
+		err = handlers.flash(options)
 	case "uninstall":
 		err = handlers.uninstall()
 	case "install":

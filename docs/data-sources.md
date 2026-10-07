@@ -31,6 +31,11 @@ Credentials are read in memory, sent only to their provider, and never included
 in Pipkin's files, terminal output, or display packets. Requests do not forward
 credentials through redirects. There is no telemetry or Pipkin server.
 
+Installation and `pipkin update` download CLI releases from GitHub. `pipkin flash`
+checks and downloads firmware releases from GitHub, and downloads the pinned
+Espressif flashing tool there when it is not already cached. These requests do not
+include provider credentials or usage readings. See the [firmware guide](firmware.md).
+
 Pipkin does not scan conversation logs or estimate token costs. Output identifies
 accounts with an installation-specific opaque value, not an email address or
 credential. Error messages omit provider response bodies and secrets.

@@ -448,6 +448,24 @@ func (h *Helper) run(ctx context.Context) {
 }
 
 func runCommand() error {
+	return runCommandWithMaintenanceRelease((*os.File).Close)
+}
+
+func runCommandWithMaintenanceRelease(release func(*os.File) error) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	// A service manager may restart the helper while flash owns the serial port.
+	// Serialize startup with maintenance until its validated PID is published.
+	maintenance, err := waitFileLock(ctx, maintenanceLockPath())
+	if err != nil {
+		return err
+	}
+	maintenanceHeld := true
+	defer func() {
+		if maintenanceHeld {
+			maintenance.Close()
+		}
+	}()
 	lock, err := lockInstance()
 	if err != nil {
 		return err
@@ -469,8 +487,13 @@ func runCommand() error {
 			logf("could not remove helper PID: %v", err)
 		}
 	}()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	// A close error still ends this startup attempt. Remove its published PID
+	// before releasing the instance lock, including that error path.
+	err = release(maintenance)
+	maintenanceHeld = false
+	if err != nil {
+		return fmt.Errorf("could not release helper startup maintenance lock: %w", err)
+	}
 	helper.run(ctx)
 	return nil
 }
