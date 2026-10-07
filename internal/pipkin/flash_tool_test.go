@@ -344,13 +344,13 @@ func TestFlashToolSubprocessBackend(t *testing.T) {
 	}
 	t.Setenv("ESPTOOL_CHIP", "esp8266")
 	t.Setenv("ESPTOOL_CFGFILE", "untrusted")
-	data, err = tool.run(context.Background(), time.Second, false, "environment")
+	data, err = tool.run(context.Background(), time.Second, "environment")
 	if err != nil || !strings.Contains(string(data), "chip= color=1 config=[esptool]") {
 		t.Fatalf("inherited config leaked into flash: %s, %v", data, err)
 	}
 	marker := filepath.Join(dir, "survived")
 	start := time.Now()
-	_, err = tool.run(context.Background(), 200*time.Millisecond, false, "hang", marker)
+	_, err = tool.run(context.Background(), 200*time.Millisecond, "hang", marker)
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 8*time.Second {
 		t.Fatalf("cancellation was not bounded: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestFlashToolOfficialSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := tool.run(ctx, 30*time.Second, false, "--help")
+	data, err := tool.run(ctx, 30*time.Second, "--help")
 	if err != nil || !bytes.Contains(data, []byte("write-flash")) || !bytes.Contains(data, []byte("read-flash")) {
 		t.Fatalf("official tool help failed: %v\n%s", err, data)
 	}

@@ -98,16 +98,7 @@ func codexStoreKey(home string) string {
 }
 
 func readCodexAuthFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := readBounded(file, 1<<20)
-	if err != nil {
-		return nil, errors.New("Codex credential file could not be read")
-	}
-	return data, nil
+	return readCredentialFile(path, 1<<20, "Codex credential file could not be read")
 }
 
 func parseCodexAuth(data []byte) (codexAuth, error) {

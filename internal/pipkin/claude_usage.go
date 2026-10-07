@@ -207,7 +207,7 @@ func parseClaudeUsage(raw []byte, now time.Time) (*Reading, error) {
 					known = false
 					continue
 				}
-				if grant.Left != nil && *grant.Left > 0 && (expiry == 0 || expiry > now.Unix()) {
+				if *grant.Left > 0 && (expiry == 0 || expiry > now.Unix()) {
 					count = min(maxBanked, count+min(*grant.Left, maxBanked))
 				}
 			}

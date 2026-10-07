@@ -53,11 +53,7 @@ func startService() error {
 		return err
 	}
 	if !exists {
-		dir, err := resolvedAppDir()
-		if err != nil {
-			return err
-		}
-		return spawnDetached(serviceBinary(), "run", "--home", dir)
+		return startDetachedHelper()
 	}
 	if err := serviceCommand("launchctl", "bootstrap", launchDomain(), launchAgentPath()); err != nil {
 		if retryErr := serviceCommand("launchctl", "kickstart", launchDomain()+"/"+serviceLabel); retryErr != nil {

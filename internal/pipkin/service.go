@@ -79,6 +79,14 @@ func waitFor(condition func() (bool, error), timeout time.Duration) error {
 	return nil
 }
 
+func startDetachedHelper() error {
+	dir, err := resolvedAppDir()
+	if err != nil {
+		return err
+	}
+	return spawnDetached(serviceBinary(), "run", "--home", dir)
+}
+
 func startHelper() error {
 	running, err := helperRunning()
 	if err != nil {

@@ -147,10 +147,7 @@ func codexUsageWindows(limits codexUsageLimits, observed int64) (session, weekly
 		if !item.valid() {
 			continue
 		}
-		window := &Window{Used: usedTenths(*item.UsedPercent), Reset: validEpoch(item.ResetAt)}
-		if item.LimitWindowSeconds > 0 {
-			window.Seconds = item.LimitWindowSeconds
-		}
+		window := &Window{Used: usedTenths(*item.UsedPercent), Reset: validEpoch(item.ResetAt), Seconds: item.LimitWindowSeconds}
 		if window.Reset == 0 && item.ResetAfterSeconds != nil && *item.ResetAfterSeconds >= 0 && *item.ResetAfterSeconds < lastEpoch-observed {
 			window.Reset = validEpoch(float64(observed + *item.ResetAfterSeconds))
 		}

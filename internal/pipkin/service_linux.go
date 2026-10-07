@@ -137,11 +137,7 @@ func startService() error {
 	if exists && hasSystemd() {
 		return serviceCommand("systemctl", "--user", "start", "pipkin.service")
 	}
-	dir, err := resolvedAppDir()
-	if err != nil {
-		return err
-	}
-	return spawnDetached(serviceBinary(), "run", "--home", dir)
+	return startDetachedHelper()
 }
 
 func stopService() error {

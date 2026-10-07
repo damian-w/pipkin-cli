@@ -51,12 +51,7 @@ func publishPID() error {
 	return nil
 }
 
-func removePID() error {
-	if err := os.Remove(pidPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
+func removePID() error { return removeIfExists(pidPath()) }
 
 func runningPID() (int, error) {
 	running, err := helperRunning()

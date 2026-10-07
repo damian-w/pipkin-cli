@@ -133,7 +133,7 @@ func prepareFlashToolAsset(ctx context.Context, output io.Writer, cache string, 
 		binary += ".exe"
 	}
 	tool := &flashTool{path: filepath.Join(destination, binary), output: output}
-	data, err := tool.run(ctx, 30*time.Second, false, "version")
+	data, err := tool.run(ctx, 30*time.Second, "version")
 	if err != nil {
 		return nil, fmt.Errorf("could not start the flashing tool: %w", err)
 	}
@@ -401,7 +401,7 @@ func (b *flashOutput) Write(data []byte) (int, error) {
 	return n, nil
 }
 
-func (t *flashTool) run(parent context.Context, timeout time.Duration, show bool, args ...string) ([]byte, error) {
+func (t *flashTool) run(parent context.Context, timeout time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	// esptool falls back to host config files when ESPTOOL_CFGFILE is missing
@@ -452,9 +452,6 @@ func (t *flashTool) run(parent context.Context, timeout time.Duration, show bool
 			detail = detail[len(detail)-1800:]
 		}
 		return data, fmt.Errorf("esptool failed: %w\n%s", err, detail)
-	}
-	if show && t.output != nil {
-		_, _ = t.output.Write(data)
 	}
 	return data, nil
 }
@@ -513,7 +510,7 @@ func (t *flashTool) Probe(ctx context.Context, port string) (flashProbe, error) 
 	if err != nil {
 		return flashProbe{}, err
 	}
-	data, err := t.run(ctx, 35*time.Second, false, append(args, "flash-id")...)
+	data, err := t.run(ctx, 35*time.Second, append(args, "flash-id")...)
 	if err != nil {
 		return flashProbe{}, err
 	}
@@ -527,7 +524,7 @@ func (t *flashTool) Probe(ctx context.Context, port string) (flashProbe, error) 
 	// eFuse registers/masks are defined by Espressif's ESP32 target specification:
 	// https://github.com/espressif/esptool/blob/v5.4.0/esptool/targets/esp32.py
 	for i, address := range []uint32{0x3ff5a000, 0x3ff5a018} {
-		data, err = t.run(ctx, 25*time.Second, false, append(args, "read-mem", fmt.Sprintf("0x%08x", address))...)
+		data, err = t.run(ctx, 25*time.Second, append(args, "read-mem", fmt.Sprintf("0x%08x", address))...)
 		if err != nil {
 			return probe, fmt.Errorf("could not check board security: %w", err)
 		}
@@ -555,7 +552,7 @@ func (t *flashTool) Read(ctx context.Context, port string, offset, size int64) (
 		return nil, err
 	}
 	args = append(args, "--chip", "esp32", "read-flash", "--no-progress", fmt.Sprintf("0x%x", offset), fmt.Sprintf("0x%x", size), filename)
-	if _, err := t.run(ctx, 90*time.Second, false, args...); err != nil {
+	if _, err := t.run(ctx, 90*time.Second, args...); err != nil {
 		return nil, err
 	}
 	info, err := os.Lstat(filename)
@@ -599,7 +596,7 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 	if t.output != nil {
 		fmt.Fprintln(t.output, "Writing firmware…")
 	}
-	if _, err := t.run(ctx, 3*time.Minute, false, write...); err != nil {
+	if _, err := t.run(ctx, 3*time.Minute, write...); err != nil {
 		return err
 	}
 	verify := append(append(append([]string{}, args...), "verify-flash"), options...)
@@ -607,7 +604,7 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 	if t.output != nil {
 		fmt.Fprintln(t.output, "Verifying firmware…")
 	}
-	_, err = t.run(ctx, 2*time.Minute, false, verify...)
+	_, err = t.run(ctx, 2*time.Minute, verify...)
 	return err
 }
 
@@ -622,7 +619,7 @@ func (t *flashTool) Reset(ctx context.Context, port string) error {
 		return err
 	}
 	args = append(args, "--chip", "esp32", "read-mac")
-	_, err = t.run(ctx, 20*time.Second, false, args...)
+	_, err = t.run(ctx, 20*time.Second, args...)
 	return err
 }
 
@@ -634,6 +631,6 @@ func (t *flashTool) EraseSettings(ctx context.Context, port string) error {
 	// ESP-IDF's fixed single-app baseline has NVS at 0x9000, size 0x6000.
 	// Only first installs explicitly approved by the caller use this operation.
 	args = append(args, "--chip", "esp32", "erase-region", "0x9000", "0x6000")
-	_, err = t.run(ctx, time.Minute, false, args...)
+	_, err = t.run(ctx, time.Minute, args...)
 	return err
 }

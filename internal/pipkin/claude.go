@@ -10,13 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -86,16 +86,7 @@ func claudeDesktopSignedIn() bool {
 }
 
 func readClaudeFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	raw, err := readBounded(f, 4<<20)
-	if err != nil {
-		return nil, errors.New("Claude credential file is unreadable or too large")
-	}
-	return raw, nil
+	return readCredentialFile(path, 4<<20, "Claude credential file is unreadable or too large")
 }
 
 func loadClaudeCredential(ctx context.Context) (claudeCredential, error) {
@@ -415,18 +406,14 @@ func parseClaudeCacheKey(text, account string) (claudeCacheKey, bool) {
 		return claudeCacheKey{}, false
 	}
 	scopes := strings.Fields(scopeText)
-	sort.Strings(scopes)
+	slices.Sort(scopes)
 	return claudeCacheKey{strings.ToLower(client), strings.ToLower(org), slices.Compact(scopes)}, true
 }
 
 // Scoped entries and V2 tombstones override older aliases, even if the old token is valid.
 func normalizedClaudeCache(cache map[string]json.RawMessage, account string) map[string]claudeCacheEntry {
 	normalized := make(map[string]claudeCacheEntry)
-	keys := make([]string, 0, len(cache))
-	for key := range cache {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(cache))
 	for _, scoped := range []bool{false, true} {
 		for _, key := range keys {
 			if strings.HasPrefix(key, "acct:") != scoped {
@@ -453,12 +440,7 @@ func selectClaudeDesktopToken(v2, v1 map[string]json.RawMessage, account, org st
 	for _, cache := range []map[string]claudeCacheEntry{newest, older} {
 		var best claudeCredential
 		bestRank := -1
-		keys := make([]string, 0, len(cache))
-		for key := range cache {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, canonical := range keys {
+		for _, canonical := range slices.Sorted(maps.Keys(cache)) {
 			cached := cache[canonical]
 			key := cached.key
 			if !strings.EqualFold(key.org, org) || !slices.Contains(key.scopes, "user:profile") {

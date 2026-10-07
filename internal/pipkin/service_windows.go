@@ -75,13 +75,7 @@ func snapshotAutostart() (func() error, error) {
 	}, nil
 }
 
-func startService() error {
-	dir, err := resolvedAppDir()
-	if err != nil {
-		return err
-	}
-	return spawnDetached(serviceBinary(), "run", "--home", dir)
-}
+func startService() error { return startDetachedHelper() }
 
 func stopService() error { return nil }
 

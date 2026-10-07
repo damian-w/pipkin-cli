@@ -74,7 +74,7 @@ func TestFlashWindowsJobCancellationAndCloseFallback(t *testing.T) {
 	t.Run("parent-exit", func(t *testing.T) {
 		marker := filepath.Join(t.TempDir(), "orphan-survived")
 		tool := &flashTool{path: binary, output: io.Discard}
-		if _, err := tool.run(context.Background(), 5*time.Second, false, "orphan", marker); err != nil {
+		if _, err := tool.run(context.Background(), 5*time.Second, "orphan", marker); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(1100 * time.Millisecond)
