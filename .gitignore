@@ -1,0 +1,7 @@
+/pipkin
+/pipkin.exe
+/pipkinw.exe
+/dist/
+*.test
+*.test.exe
+.DS_Store

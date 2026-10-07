@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Unix installer checks
+        if: runner.os != 'Windows'
+        run: |
+          sh -n install.sh
+          sh scripts/install_test.sh
+      - name: Windows installer checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { throw ($errors | Out-String) }
+          go build -o "$env:RUNNER_TEMP/fakeinstall.exe" ./scripts/fakeinstall
+          ./scripts/install_test.ps1 -FakeHelper "$env:RUNNER_TEMP/fakeinstall.exe"
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_test.ps1 -FakeHelper "$env:RUNNER_TEMP/fakeinstall.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell installer checks failed" }
+      - name: Formatting and cross compilation
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          test -z "$(gofmt -l .)"
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build -o "$RUNNER_TEMP/pipkin" .
+          done

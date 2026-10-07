@@ -1,0 +1,51 @@
+name: Release CLI
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Check
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          sh scripts/install_test.sh
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          flags="-s -w -buildid= -X main.version=$version"
+          sh scripts/notices.sh
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}" arch="${target#*/}"
+            if [ "$os" = windows ]; then
+              GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "$flags" \
+                -o "dist/pipkin-$os-$arch.exe" .
+              GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "$flags -H=windowsgui" \
+                -o "dist/pipkinw-$os-$arch.exe" .
+            else
+              GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "$flags" \
+                -o "dist/pipkin-$os-$arch" .
+            fi
+          done
+          (cd dist && sha256sum pipkin* > SHA256SUMS)
+          cp LICENSE NOTICE.md dist/
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Pipkin CLI $GITHUB_REF_NAME" --generate-notes
