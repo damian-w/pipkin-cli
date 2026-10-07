@@ -226,6 +226,11 @@ func statusCommand() error {
 }
 
 func startCommand() error {
+	maintenance, err := acquireFileLock(maintenanceLockPath())
+	if err != nil {
+		return fmt.Errorf("could not start the helper while firmware maintenance is in progress: %w", err)
+	}
+	maintenance.Close()
 	if _, err := os.Stat(installedBinary()); err != nil {
 		return errors.New("Pipkin is not installed")
 	}
