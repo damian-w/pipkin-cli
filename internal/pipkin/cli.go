@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 var version string
@@ -15,10 +16,10 @@ Usage: pipkin <command>
 
 Commands:
   usage       Read current usage now (--json for all fields)
-  authorize   Allow macOS access to Claude's existing sign-in
-  status      Show helper and display status (--json for cached readings)
+%s  status      Show helper and display status (--json for cached readings)
   start       Start the helper now
   stop        Stop the helper until next sign-in
+  restart     Restart the helper now
   update      Install the latest helper release
   flash       Install or update display firmware (asks for confirmation)
   uninstall   Remove the helper and its settings
@@ -27,11 +28,21 @@ Commands:
   license     Show the license and third-party notices
 `
 
+func formatCLIUsage(buildVersion, goos string) string {
+	authorize := ""
+	if goos == "darwin" {
+		authorize = "  authorize   Allow macOS access to Claude's existing sign-in\n"
+	}
+	return fmt.Sprintf(usage, buildVersion, authorize)
+}
+
 func Run(buildVersion, licenseText, thirdPartyNotices string) {
 	version = buildVersion
 	code, err := dispatch(os.Args[1:], buildVersion, licenseText, thirdPartyNotices, os.Stdout, cliHandlers{
-		usageCommand, authorizeCommand, statusCommand, statusJSONCommand, startCommand,
-		stopCommand, updateCommand, uninstallCommand, installCommand, runCommand, flashCommand,
+		usage: usageCommand, authorize: authorizeCommand, status: statusCommand,
+		statusJSON: statusJSONCommand, start: startCommand, stop: stopCommand,
+		restart: restartCommand, update: updateCommand, uninstall: uninstallCommand,
+		install: installCommand, run: runCommand, flash: flashCommand,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pipkin: %v\n", err)
@@ -48,6 +59,7 @@ type cliHandlers struct {
 	statusJSON func() error
 	start      func() error
 	stop       func() error
+	restart    func() error
 	update     func() error
 	uninstall  func() error
 	install    func([]string) error
@@ -56,21 +68,23 @@ type cliHandlers struct {
 }
 
 func dispatch(args []string, buildVersion, licenseText, notices string, output io.Writer, handlers cliHandlers) (int, error) {
+	menu := formatCLIUsage(buildVersion, runtime.GOOS)
 	if len(args) == 0 {
-		_, err := fmt.Fprintf(output, usage, buildVersion)
+		_, err := io.WriteString(output, menu)
 		return cliResult(err)
 	}
 	command := args[0]
 	commandUsage := map[string]string{
 		"usage": "pipkin usage [--json]", "authorize": "pipkin authorize",
 		"status": "pipkin status [--json]", "start": "pipkin start", "stop": "pipkin stop",
-		"update": "pipkin update", "uninstall": "pipkin uninstall", "install": "pipkin install",
+		"restart": "pipkin restart",
+		"update":  "pipkin update", "uninstall": "pipkin uninstall", "install": "pipkin install",
 		"version": "pipkin version", "--version": "pipkin --version", "license": "pipkin license", "run": "pipkin run [--home DIR]",
 		"flash": "pipkin flash [--port PORT] [--version VERSION] [--reinstall]",
 	}
 	if command == "help" || command == "-h" || command == "--help" {
 		if len(args) == 1 {
-			_, err := fmt.Fprintf(output, usage, buildVersion)
+			_, err := io.WriteString(output, menu)
 			return cliResult(err)
 		}
 		if command != "help" || len(args) != 2 {
@@ -81,7 +95,7 @@ func dispatch(args []string, buildVersion, licenseText, notices string, output i
 	}
 	syntax, known := commandUsage[command]
 	if !known {
-		return 2, fmt.Errorf("unknown command %q\n\n%s", command, fmt.Sprintf(usage, buildVersion))
+		return 2, fmt.Errorf("unknown command %q\n\n%s", command, menu)
 	}
 	options := args[1:]
 	if len(options) == 1 && (options[0] == "--help" || options[0] == "-h") {
@@ -132,6 +146,8 @@ func dispatch(args []string, buildVersion, licenseText, notices string, output i
 		err = handlers.start()
 	case "stop":
 		err = handlers.stop()
+	case "restart":
+		err = handlers.restart()
 	case "update":
 		err = handlers.update()
 	case "flash":
