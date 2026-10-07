@@ -9,10 +9,12 @@ started yet; they start with the first message and have no reset countdown.
 
 ## Existing sign-ins
 
-Claude prefers the account selected in Claude Desktop. An existing Claude Code
-sign-in can be used when no Desktop sign-in is available. Codex uses its existing
-local subscription sign-in and configured credential store. API keys are not used
-for subscription readings.
+Claude prefers the account selected in Claude Desktop. Pipkin reads Desktop's
+saved access token and account/organization selection, including its selection
+cookie when available, and decrypts encrypted data in memory. An existing Claude
+Code sign-in can be used when Desktop has no saved sign-in. Codex uses its existing
+local subscription sign-in from its configured auth file or OS credential store.
+API keys are not used for subscription readings.
 
 On Windows, a running Claude Desktop can exclusively lock its cookie database.
 When its active-organization cookie is missing or inaccessible, Pipkin can infer
@@ -24,9 +26,10 @@ Multiple cached organizations remain unavailable without a readable selection
 cookie. This fallback verifies the credential's identity; it cannot detect a GUI
 organization switch that Claude has not yet saved in its token caches.
 
-On macOS, installation may ask for Keychain permission to read Claude's saved
-sign-in. CLI updates started by version 1.2.0 or later also check this permission
-from the newly installed executable before restarting the background helper.
+On macOS, installation may ask for permission to read the `Claude Safe Storage`
+Keychain item, used to decrypt Claude Desktop's saved data. CLI updates started
+by version 1.2.0 or later also check this permission from the newly installed
+executable before restarting the background helper.
 Choose **Always Allow** for background access. If access is blocked or you cancel,
 run `pipkin authorize`, then `pipkin restart` to retry. Updates started by an older
 CLI may need this manual recovery.
@@ -35,26 +38,48 @@ access requires an already unlocked Secret Service store; basic storage and auth
 files do not. Windows uses the current user's credential storage.
 
 The provider apps manage their own sign-ins. If a session expires, open the
-provider's app to renew it. Pipkin does not refresh or replace their credentials.
+provider's app to renew it. Pipkin does not use refresh tokens or refresh, replace,
+save or delete provider credentials.
 
 ## Data handling
 
 Subscription requests go directly to the relevant provider over HTTPS.
 Credentials are read in memory, sent only to their provider, and never included
 in Pipkin's files, terminal output, or display packets. Requests do not forward
-credentials through redirects. There is no telemetry or Pipkin server.
+credentials through redirects. The CLI sends no analytics, activity pings or crash
+reports, and there is no Pipkin server receiving credentials or usage data.
 
 Installation and `pipkin update` download CLI releases from GitHub. `pipkin flash`
 checks and downloads firmware releases from GitHub, and downloads the pinned
 Espressif flashing tool there when it is not already cached. These requests do not
 include provider credentials or usage readings. See the [firmware guide](firmware.md).
 
-Pipkin does not scan conversation logs or estimate token costs. Output identifies
-accounts with an installation-specific opaque value, not an email address or
-credential. Error messages omit provider response bodies and secrets.
+Pipkin does not scan conversation logs or keep or send conversation text.
+Saved readings and output identify accounts with an
+installation-specific hashed value, not a name, email address, provider account ID
+or credential. Error messages omit provider response bodies and secrets.
 
-Pipkin only reads usage. It does not submit model requests, redeem resets,
-purchase credits, or change subscription settings.
+Pipkin reads usage and the account information needed to verify it. It does not
+submit model requests, redeem resets, purchase credits, or change subscription
+settings.
+
+## Local files and controls
+
+Pipkin keeps settings, helper/display status, its latest usage snapshot and a
+diagnostic log in `~/Library/Application Support/Pipkin` on macOS,
+`~/.local/share/pipkin` on Linux, or `%LOCALAPPDATA%\Pipkin` on Windows. `PIPKIN_HOME`
+can override this location; Linux also respects `XDG_DATA_HOME`.
+
+Snapshots can include plan, allowance and model limits, reading and reset times,
+banked resets, the hashed account reference and other provider-reported usage
+details. Raw provider responses are not saved. Logs can include diagnostic errors,
+local file paths and display connection details. Each snapshot replaces the
+previous one, and the log rotates as it grows. Pipkin does not upload or cloud-sync
+these files; they remain until removed.
+
+`pipkin stop` pauses automatic checks until the next sign-in or `pipkin start`.
+`pipkin uninstall` removes the helper, automatic startup and Pipkin's folder,
+leaving provider sign-ins intact.
 
 ## Output and display support
 
