@@ -11,4 +11,9 @@ v=1 seq=10 kind=usage provider=codex mode=full account=codex observed=1800000001
 v=1 seq=11 kind=usage provider=claude mode=full account=claude observed=1800000001 session=metered session_id=r1800003600 session_used=235 session_reset=1800003600 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=7
 v=1 seq=12 kind=usage provider=claude mode=full account=claude observed=1800000002 session=not_started session_id=current session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=7
 v=1 seq=13 kind=usage provider=claude mode=full account=claude observed=1800000003 session=metered session_id=r1800018000 session_used=10 session_reset=1800018000 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=7
-v=1 seq=14 kind=host state=disconnected
+v=1 seq=14 kind=host state=asleep
+v=1 seq=15 kind=host state=asleep
+v=1 seq=16 kind=host state=asleep
+v=1 seq=17 kind=host state=asleep
+v=1 seq=18 kind=host state=awake
+v=1 seq=19 kind=host state=disconnected

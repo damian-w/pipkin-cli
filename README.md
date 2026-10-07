@@ -31,6 +31,18 @@ Installation starts Pipkin in the background and at sign-in. On Unix, add
 `~/.local/bin` to your PATH if needed; on Windows, open a new terminal. Linux may
 need serial-port group access.
 
+The display follows computer sleep, resume and shutdown. macOS and Windows also
+follow screen sleep, including macOS's **Put Display to Sleep** Hot Corner. Linux
+requires systemd-logind for host power notifications. On macOS and Windows, Pipkin
+remains dark during background wakes while the screens are asleep. It reconnects
+automatically on resume or at sign-in. Closing a laptop lid while the system and an
+external display remain awake keeps Pipkin awake. Automatic startup before sign-in
+is not provided.
+
+With matching display firmware, a missed system-sleep/shutdown report or stopped
+helper is covered by a 90-second heartbeat timeout. Waking lights the display
+immediately while fresh usage loads.
+
 On macOS, installation and CLI updates may ask for access to Claude's saved
 sign-in. The newly installed helper requests permission before it starts in the
 background. Choose **Always Allow** if Keychain asks. If access is blocked or you

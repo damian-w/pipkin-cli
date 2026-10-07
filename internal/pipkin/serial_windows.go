@@ -35,7 +35,9 @@ func openSerial(name string) (serialPort, error) {
 	dcb.Parity = 0   // NOPARITY
 	dcb.StopBits = 0 // ONESTOPBIT
 	dcb.Flags = 1    // fBinary; DTR and RTS control disabled so opening does not reset the board.
-	timeouts := windows.CommTimeouts{ReadIntervalTimeout: 0xFFFFFFFF, WriteTotalTimeoutConstant: 2000}
+	// Leave enough of Windows' brief pre-suspend notification window to
+	// process the sleep report and acknowledge it before the host suspends.
+	timeouts := windows.CommTimeouts{ReadIntervalTimeout: 0xFFFFFFFF, WriteTotalTimeoutConstant: 500}
 	if err := windows.SetCommState(handle, &dcb); err != nil {
 		windows.CloseHandle(handle)
 		return nil, err

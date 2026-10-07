@@ -149,6 +149,14 @@ func TestProtocolFixture(t *testing.T) {
 	h.readings["claude"].Observed = testNow + 3
 	h.readings["claude"].Session = &Window{Used: 10, Reset: testNow + 18000, Seconds: 18000}
 	h.flush()
+	// Exercise native-event reports through the same wire fixture the firmware
+	// consumes, including a maintenance resume while the displays remain asleep.
+	h.conn = &connection{port: &fakePort{}, name: "COM1"}
+	h.handlePowerEvent(powerEvent{kind: powerDisplaySleep, active: true})
+	h.sendHostPower()
+	h.handlePowerEvent(powerEvent{kind: powerSystemSleep, active: true})
+	h.handlePowerEvent(powerEvent{kind: powerSystemSleep, active: false})
+	h.handlePowerEvent(powerEvent{kind: powerDisplaySleep, active: false})
 	h.send("kind=host state=disconnected")
 
 	got := strings.Join(*lines, "")
@@ -243,6 +251,9 @@ func TestOffsetChangeAndShortClockRollback(t *testing.T) {
 	}
 	mono := time.Now()
 	h.observeClock(mono.Add(time.Second), mono.Round(0).Add(30*time.Second), mono)
+	if !h.due["heartbeat"].IsZero() || !h.due["identify"].IsZero() {
+		t.Fatal("clock-jump/wake fallback must immediately report current power and verify USB")
+	}
 	h.syncClock("1800000030")
 	if got := (*lines)[len(*lines)-1]; !strings.Contains(got, "rebase=1") || h.generation != 1 {
 		t.Fatalf("a detected 30-second rollback requires a new observation epoch: %q", got)

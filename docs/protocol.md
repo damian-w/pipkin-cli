@@ -87,6 +87,26 @@ transport activity; `host state=disconnected` marks it disconnected. Receiving
 another message after a disconnect leaves host power state unknown until a
 host report arrives.
 
+Screen power is independent from that liveness diagnostic. The display goes dark
+after 90 seconds without host reports, or immediately after an explicit disconnect.
+Before the first host report, accepted transport activity supplies the timeout;
+with no activity, the timeout starts at firmware boot. Silence does not assign an
+`asleep` or `disconnected` host state. An explicit `awake` transition, or recovery
+after the 90-second timeout, gives a one-minute brightness grace while fresh usage
+loads. Regular awake heartbeats do not extend that grace. Touch can temporarily
+wake a screen darkened by missing traffic or stale readings; explicit `asleep`
+ignores touch until an `awake` report arrives.
+
+The CLI derives these reports from system sleep and shutdown, plus screen sleep
+on macOS and Windows. Each sleep reason must clear before reporting `awake`.
+Connection/resync and 30-second heartbeats report the current state. OS shutdown
+cleanup preserves `asleep`; ordinary helper termination reports `disconnected`.
+Before allowing system sleep/shutdown, the helper makes a bounded attempt to
+confirm its sleep report using `identify` and the returned accepted sequence.
+A matching sequence and clock epoch are required; other identity responses do not
+acknowledge the report. Unavailable USB must never hold up host sleep indefinitely;
+the heartbeat timeout covers missing reports.
+
 Application states are `available`, `unavailable`, `unsupported`, and
 `signed_out`. Availability is separate from host liveness and usage freshness.
 Closing or losing an application may retain its last known readings.

@@ -67,6 +67,10 @@ type Helper struct {
 	due              map[string]time.Time
 	cooldown         map[string]time.Time
 	lastStatus       []byte
+	power            hostPower
+	powerEvents      <-chan powerEvent
+	monitor          func(context.Context, chan<- powerEvent) (func(), error)
+	handlingPower    bool
 }
 
 func newHelper() (*Helper, error) {
@@ -97,8 +101,20 @@ func (h *Helper) context() context.Context {
 }
 
 func (h *Helper) send(fields string) bool {
+	generation := h.generation
+	if !h.handlingPower && !strings.HasPrefix(fields, "kind=host ") {
+		h.drainPowerEvents(h.powerEvents)
+	}
+	if generation != h.generation && strings.HasPrefix(fields, "kind=usage ") {
+		return false
+	}
+	if (h.power.systemSleeping || h.power.shuttingDown) && !strings.HasPrefix(fields, "kind=host ") {
+		return false
+	}
 	h.sequence++
-	if err := h.write(h.context(), fmt.Sprintf("v=1 seq=%d %s\n", h.sequence, fields)); err != nil {
+	ctx, cancel := context.WithTimeout(h.context(), powerWriteTimeout)
+	defer cancel()
+	if err := h.write(ctx, fmt.Sprintf("v=1 seq=%d %s\n", h.sequence, fields)); err != nil {
 		h.disconnect("write failed: " + err.Error())
 		return false
 	}
@@ -181,7 +197,9 @@ func (h *Helper) resync(identity map[string]string) {
 	}
 	h.setClockEpoch(epoch)
 	h.sent = map[string]string{}
-	if !h.syncClock(identity["unix"]) || !h.send("kind=host state=awake") {
+	// A display may have gone to sleep while USB discovery was in progress.
+	h.drainPowerEvents(h.powerEvents)
+	if !h.syncClock(identity["unix"]) || !h.sendHostPower() {
 		return
 	}
 	h.due["heartbeat"] = h.now().Add(heartbeatEvery)
@@ -216,6 +234,7 @@ func (h *Helper) observeClock(now, lastWall, lastMono time.Time) {
 		}
 		h.refreshProviders(now)
 		h.due["identify"] = time.Time{}
+		h.due["heartbeat"] = time.Time{}
 	}
 }
 
@@ -329,15 +348,16 @@ func (h *Helper) pollProviders(ctx context.Context, now time.Time) {
 				h.readings[result.provider] = result.reading
 				h.observedGeneration[result.provider] = result.generation
 			}
-			if result.generation != h.generation && result.err == nil {
-				// Keep the snapshot for JSON, but re-observe before sending a new epoch.
+			if result.generation != h.generation {
+				// Re-observe after resume/rebase even if the old worker failed. Its
+				// generic retry delay must not postpone the requested fresh read.
 				h.due[result.provider] = now
 			}
 			if h.cooldown[result.provider].After(h.due[result.provider]) {
 				h.due[result.provider] = h.cooldown[result.provider]
 			}
 		default:
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || h.power.asleep() {
 				return
 			}
 			for _, provider := range providers {
@@ -382,12 +402,17 @@ func (h *Helper) run(ctx context.Context) {
 	logf("helper %s started", version)
 	h.ctx = ctx
 	defer func() {
+		h.drainPowerEvents(h.powerEvents)
 		// Provider work has stopped; allow one bounded final host report.
 		shutdown, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		h.ctx = shutdown
 		if h.conn != nil {
-			h.send("kind=host state=disconnected")
+			state := "disconnected"
+			if h.power.systemSleeping || h.power.shuttingDown {
+				state = "asleep"
+			}
+			h.send("kind=host state=" + state)
 			if h.conn != nil {
 				h.conn.port.Close()
 				h.conn = nil
@@ -395,14 +420,41 @@ func (h *Helper) run(ctx context.Context) {
 		}
 		logf("helper stopped")
 	}()
+	if ctx.Err() != nil {
+		return
+	}
+	events := make(chan powerEvent, 32)
+	h.powerEvents = events
+	monitor := h.monitor
+	if monitor == nil {
+		monitor = startPowerMonitor
+	}
+	stop, err := monitor(ctx, events)
+	if err != nil {
+		logf("host power notifications unavailable: %v; using display heartbeat timeout", err)
+	}
+	if stop != nil {
+		defer stop()
+	}
 	lastMono := h.now()
 	lastWall := lastMono.Round(0)
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
+		h.drainPowerEvents(events)
 		now := h.now()
 		h.observeClock(now, lastWall, lastMono)
 		lastWall, lastMono = now.Round(0), now
+		if h.power.systemSleeping || h.power.shuttingDown {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-events:
+				h.handlePowerEvent(event)
+			case <-ticker.C:
+			}
+			continue
+		}
 		if h.conn == nil && now.After(h.due["discover"]) {
 			h.connect(ctx)
 			now = h.now()
@@ -410,6 +462,10 @@ func (h *Helper) run(ctx context.Context) {
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		h.drainPowerEvents(events)
+		if h.power.systemSleeping || h.power.shuttingDown {
+			continue
 		}
 		if h.conn != nil {
 			if h.offsetChanged(now) || h.rebaseNeeded {
@@ -421,13 +477,20 @@ func (h *Helper) run(ctx context.Context) {
 		}
 		h.pollProviders(ctx, now)
 		if h.conn != nil {
+			h.drainPowerEvents(events)
+			if h.power.systemSleeping || h.power.shuttingDown {
+				continue
+			}
 			if now.After(h.due["heartbeat"]) {
 				h.due["heartbeat"] = now.Add(heartbeatEvery)
-				h.send("kind=host state=awake")
+				h.sendHostPower()
 			}
 			if h.conn != nil && now.After(h.due["identify"]) {
 				h.due["identify"] = now.Add(identifyEvery)
-				if err := h.conn.port.Write(ctx, []byte("v=1 kind=identify\n")); err != nil {
+				writeCtx, cancel := context.WithTimeout(ctx, powerWriteTimeout)
+				err := h.conn.port.Write(writeCtx, []byte("v=1 kind=identify\n"))
+				cancel()
+				if err != nil {
 					h.disconnect("write failed: " + err.Error())
 				} else {
 					h.identifyPending = true
@@ -442,6 +505,8 @@ func (h *Helper) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case event := <-events:
+			h.handlePowerEvent(event)
 		case <-ticker.C:
 		}
 	}
