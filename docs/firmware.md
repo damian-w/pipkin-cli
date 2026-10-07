@@ -2,8 +2,9 @@
 
 `pipkin flash` installs the latest stable firmware from
 [damian-w/pipkin](https://github.com/damian-w/pipkin/releases). Self-built boards and
-Pipkin kits use the same command. It requires CLI **1.1.0 or later**; `pipkin update`
-updates the CLI, while `pipkin flash` updates the display.
+Pipkin kits use the same command. The latest firmware requires CLI **1.4.0 or
+later**; `pipkin update` updates the CLI, while `pipkin flash` updates the display.
+Earlier firmware releases supported CLI 1.1.0 or later.
 
 ## Supported board
 
@@ -117,8 +118,8 @@ cache checks and the tool's third-party notices.
 
 The CLI supports macOS, Linux and Windows on AMD64 and ARM64. Flashing on Windows
 ARM64 uses the official AMD64 tool through Windows 11's x64 emulation, and still
-needs hardware qualification. The provisional board profile and USB flashing path
-also require physical qualification on the other platforms.
+needs hardware qualification. The qualified board catalog records the completed
+physical checks; USB flashing still requires qualification on the other platforms.
 
 Building and flashing your own firmware with ESP-IDF remains available in the
 [source-build guide](https://github.com/damian-w/pipkin/blob/main/docs/development.md#build-firmware-from-source).

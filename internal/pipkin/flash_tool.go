@@ -55,10 +55,17 @@ type flashTool struct {
 	output io.Writer
 }
 type flashProbe struct {
-	Chip       string
-	FlashBytes int64
-	Secure     bool
-	MAC        string
+	Chip              string
+	ChipDescription   string
+	Features          string
+	CrystalMHz        int
+	FlashBytes        int64
+	FlashManufacturer string
+	FlashDevice       string
+	Secure            bool
+	SecureBoot        bool
+	FlashEncrypted    bool
+	MAC               string
 }
 type flashWriteImage struct {
 	Path   string
@@ -468,9 +475,10 @@ func toolPortArgs(port, before, after string, rom bool) ([]string, error) {
 }
 
 var (
-	toolChipLine  = regexp.MustCompile(`(?m)^Connected to (ESP[0-9A-Za-z-]+) on .+:\s*$`)
-	toolFlashLine = regexp.MustCompile(`(?m)^Detected flash size:\s*([0-9]+)(KB|MB)\s*$`)
-	toolMACLine   = regexp.MustCompile(`(?mi)^MAC:\s*([0-9a-f]{2}(?::[0-9a-f]{2}){5})\s*$`)
+	toolChipLine   = regexp.MustCompile(`(?m)^Connected to (ESP[0-9A-Za-z-]+) on .+:\s*$`)
+	toolFlashLine  = regexp.MustCompile(`(?m)^Detected flash size:\s*([0-9]+)(KB|MB)\s*$`)
+	toolMACLine    = regexp.MustCompile(`(?mi)^MAC:\s*([0-9a-f]{2}(?::[0-9a-f]{2}){5})\s*$`)
+	toolDetailLine = regexp.MustCompile(`(?m)^(Chip type|Features|Crystal frequency|Manufacturer|Device):[ \t]*([^\r\n]+)$`)
 )
 
 func parseFlashProbe(data []byte) (flashProbe, error) {
@@ -492,6 +500,42 @@ func parseFlashProbe(data []byte) (flashProbe, error) {
 		probe.FlashBytes *= 1024
 	}
 	probe.MAC = strings.ToLower(string(mac[0][1]))
+	seen := map[string]bool{}
+	for _, detail := range toolDetailLine.FindAllSubmatch(data, -1) {
+		key, value := string(detail[1]), strings.TrimSpace(string(detail[2]))
+		if seen[key] {
+			return flashProbe{}, fmt.Errorf("ambiguous esptool %s", key)
+		}
+		seen[key] = true
+		switch key {
+		case "Chip type":
+			probe.ChipDescription = value
+		case "Features":
+			probe.Features = value
+		case "Crystal frequency":
+			frequency, err := strconv.Atoi(strings.TrimSuffix(value, "MHz"))
+			if err != nil || frequency <= 0 || frequency > 100 {
+				return flashProbe{}, errors.New("invalid crystal frequency")
+			}
+			probe.CrystalMHz = frequency
+		case "Manufacturer", "Device":
+			width := 2
+			if key == "Device" {
+				width = 4
+			}
+			if len(value) != width {
+				return flashProbe{}, errors.New("invalid SPI flash ID")
+			}
+			if _, err := strconv.ParseUint(value, 16, 16); err != nil {
+				return flashProbe{}, errors.New("invalid SPI flash ID")
+			}
+			if key == "Manufacturer" {
+				probe.FlashManufacturer = strings.ToLower(value)
+			} else {
+				probe.FlashDevice = strings.ToLower(value)
+			}
+		}
+	}
 	return probe, nil
 }
 
@@ -533,7 +577,9 @@ func (t *flashTool) Probe(ctx context.Context, port string) (flashProbe, error) 
 			return probe, err
 		}
 	}
-	probe.Secure = bits.OnesCount32((registers[0]>>20)&0x7f)%2 != 0 || registers[1]&0x30 != 0
+	probe.FlashEncrypted = bits.OnesCount32((registers[0]>>20)&0x7f)%2 != 0
+	probe.SecureBoot = registers[1]&0x30 != 0
+	probe.Secure = probe.FlashEncrypted || probe.SecureBoot
 	return probe, nil
 }
 

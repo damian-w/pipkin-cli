@@ -17,12 +17,12 @@ func recordingHandlers(calls *int) cliHandlers {
 	return cliHandlers{
 		usage: withArgs, authorize: call, status: call, statusJSON: call,
 		start: call, stop: call, restart: call, update: call, uninstall: call,
-		install: withArgs, run: call, flash: withArgs,
+		install: withArgs, run: call, flash: withArgs, identify: withArgs,
 	}
 }
 
 func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
+	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
 		for _, option := range []string{"--dry-run", "--json --extra"} {
 			calls := 0
 			code, err := dispatch([]string{command, option}, "test", "", "", io.Discard, recordingHandlers(&calls))
@@ -34,7 +34,7 @@ func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
 }
 
 func TestCLIHelpHasNoCommandSideEffects(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
+	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
 		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
 			var output bytes.Buffer
 			calls := 0
@@ -53,7 +53,7 @@ func TestCLIUsageListsCommandsForPlatform(t *testing.T) {
 			if strings.Contains(menu, "\n  authorize ") != (goos == "darwin") {
 				t.Fatalf("incorrect authorize visibility on %s: %q", goos, menu)
 			}
-			for _, command := range []string{"usage", "status", "start", "stop", "restart", "update", "flash", "uninstall", "install", "version", "license"} {
+			for _, command := range []string{"usage", "status", "start", "stop", "restart", "update", "flash", "identify", "uninstall", "install", "version", "license"} {
 				if !strings.Contains(menu, "\n  "+command+" ") {
 					t.Fatalf("%s missing from %s command menu: %q", command, goos, menu)
 				}
@@ -154,6 +154,36 @@ func TestCLIReportsOutputErrors(t *testing.T) {
 	for _, args := range [][]string{nil, {"version"}, {"license"}, {"stop", "--help"}} {
 		if code, err := dispatch(args, "test", "license", "notices", failingCLIWriter{}, cliHandlers{}); code != 1 || !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("%v: %d, %v", args, code, err)
+		}
+	}
+}
+
+func TestCLIRoutesIdentifyAndExplainsBoardConfirmation(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	calls := 0
+	wantArgs := []string{"--port", "TESTPORT", "--issue", "--board", "test-cyd-profile"}
+	handlers := cliHandlers{identify: func(args []string) error {
+		calls++
+		if strings.Join(args, " ") != strings.Join(wantArgs, " ") {
+			t.Fatalf("identify arguments: %v", args)
+		}
+		return nil
+	}}
+	if code, err := dispatch(append([]string{"identify"}, wantArgs...), "test", "", "", io.Discard, handlers); code != 0 || err != nil || calls != 1 {
+		t.Fatalf("identify: code=%d error=%v calls=%d", code, err, calls)
+	}
+	for _, args := range [][]string{{"identify", "--json", "--issue"}, {"identify", "--board="}} {
+		if code, err := dispatch(args, "test", "", "", io.Discard, handlers); code != 1 || err == nil || calls != 1 {
+			t.Fatalf("invalid identify options: %v code=%d error=%v calls=%d", args, code, err, calls)
+		}
+	}
+	var output bytes.Buffer
+	if code, err := dispatch([]string{"identify", "--help"}, "test", "", "", &output, handlers); code != 0 || err != nil || calls != 1 {
+		t.Fatalf("identify help: code=%d error=%v calls=%d", code, err, calls)
+	}
+	for _, wanted := range []string{"temporarily restarts", "physical board", "MAC address", "--issue", "No issue is sent", "--board PROFILE"} {
+		if !strings.Contains(output.String(), wanted) {
+			t.Fatalf("identify help omits %q: %s", wanted, output.String())
 		}
 	}
 }

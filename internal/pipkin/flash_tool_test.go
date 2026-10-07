@@ -56,6 +56,22 @@ func TestFlashSecurityRegisterParserFailsClosed(t *testing.T) {
 	}
 }
 
+func TestFlashProbeElectronicsDetails(t *testing.T) {
+	data := "Connected to ESP32 on /dev/cu.usbserial-test:\nChip type: ESP32-D0WD-V3 (revision v3.1)\nFeatures: Wi-Fi, BT, Dual Core + LP Core, 240MHz\nCrystal frequency: 40MHz\nMAC: AA:BB:CC:DD:EE:FF\nManufacturer: 68\nDevice: 4016\nDetected flash size: 4MB\n"
+	probe, err := parseFlashProbe([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.ChipDescription != "ESP32-D0WD-V3 (revision v3.1)" || probe.Features == "" || probe.CrystalMHz != 40 || probe.FlashManufacturer != "68" || probe.FlashDevice != "4016" {
+		t.Fatalf("missing electronics details: %+v", probe)
+	}
+	for _, malformed := range []string{data + "Manufacturer: ef\n", strings.Replace(data, "Crystal frequency: 40MHz", "Crystal frequency: 400MHz", 1), strings.Replace(data, "Device: 4016", "Device: ???", 1)} {
+		if _, err := parseFlashProbe([]byte(malformed)); err == nil {
+			t.Fatalf("accepted malformed details: %q", malformed)
+		}
+	}
+}
+
 func testToolArchive(t *testing.T, platform, suffix string, files map[string][]byte, unsafe bool) (string, flashToolAsset) {
 	t.Helper()
 	filename := filepath.Join(t.TempDir(), "tool"+suffix)

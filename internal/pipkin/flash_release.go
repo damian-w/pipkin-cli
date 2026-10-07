@@ -84,13 +84,14 @@ func validateFirmwareManifest(m firmwareManifest, tag, cliVersion string) error 
 	if _, valid := stableVersionNumbers(cliVersion); !valid || newerStableFirmware(m.MinimumCLI, cliVersion) {
 		return fmt.Errorf("firmware requires CLI %s or later; run pipkin update", m.MinimumCLI)
 	}
-	if m.Board != "esp32-2432s028r-provisional" || (m.Hardware != "unconfirmed" && m.Hardware != "confirmed") || m.Chip != "esp32" {
+	profile, supported := firmwareBoardProfile(m.Board)
+	if !supported || (m.Hardware != "unconfirmed" && m.Hardware != "confirmed") || m.Chip != profile.Chip {
 		return errors.New("release does not support the ESP32-2432S028R board profile")
 	}
 	if m.ProtocolMin != 1 || m.ProtocolMax < 1 {
 		return errors.New("release is incompatible with the display protocol supported by this CLI")
 	}
-	if m.FlashSize != 4<<20 || m.FlashMode != "dio" || m.FlashFreq != "40m" || m.Layout != "esp32-single-app-v1" {
+	if m.FlashSize != profile.FlashSize || m.FlashMode != profile.FlashMode || m.FlashFreq != profile.FlashFreq || m.Layout != profile.Layout {
 		return errors.New("release uses an unsupported flash layout or flash settings")
 	}
 	if len(m.Images) != 3 {

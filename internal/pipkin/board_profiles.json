@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "esp32-2432s028r",
+      "aliases": ["esp32-2432s028r-provisional"],
+      "name": "ESP32 2.8-inch resistive CYD",
+      "hardware": "confirmed",
+      "chip": "esp32",
+      "flash_size": 4194304,
+      "flash_mode": "dio",
+      "flash_freq": "40m",
+      "layout": "esp32-single-app-v1",
+      "display": {
+        "controller": "ILI9341-compatible",
+        "width": 320,
+        "height": 240
+      },
+      "touch": {
+        "controller": "XPT2046-compatible",
+        "type": "resistive"
+      },
+      "variants": [
+        {
+          "id": "bruce-cyd-2432s028-dual-usb",
+          "name": "Bruce CYD 2432S028 with USB-C and micro-USB",
+          "pcb_markings": ["Bruce CYD 2432S028"],
+          "module_markings": ["ESP-32S"],
+          "usb_connectors": ["USB-C", "micro-USB"],
+          "observations": {
+            "observed_on": "2026-10-07",
+            "display_marking": "TPM408-2.8",
+            "display_size_inches": 2.8,
+            "native_width": 240,
+            "native_height": 320,
+            "chip_description": "ESP32-D0WD-V3",
+            "chip_revision": "v3.1",
+            "crystal_mhz": 40,
+            "flash_manufacturer": "0x68",
+            "flash_device": "0x4016",
+            "usb_vid": "1a86",
+            "usb_pid": "7523",
+            "usb_product": "USB Serial",
+            "secure_boot": false,
+            "flash_encryption": false,
+            "firmware_version": "1.2.0",
+            "supplier_url": "https://www.aliexpress.com/item/1005009383089648.html"
+          },
+          "qualification": {
+            "display": true,
+            "touch": true,
+            "flash": null,
+            "update": null,
+            "usb_reset": true
+          },
+          "notes": [
+            "PCB and module markings and both USB connector types reported by the owner.",
+            "Owner confirmed display colors, orientation and touch operation with Pipkin 1.2.0.",
+            "Display and touch controller compatibility inferred from working drivers; controller silicon was not read back.",
+            "ROM probing reset the board and the Pipkin helper resumed successfully.",
+            "First installation and settings-preserving firmware update were not tested in this qualification session.",
+            "Supplier URL records the owner's purchase source; seller specifications are not qualification evidence."
+          ]
+        },
+        {
+          "id": "esp32-2432s028r-dual-usb",
+          "name": "ESP32-2432S028R with USB-C and micro-USB",
+          "pcb_markings": ["ESP32-2432S028R"],
+          "module_markings": [],
+          "usb_connectors": ["USB-C", "micro-USB"],
+          "observations": {
+            "observed_on": "2026-10-07",
+            "display_marking": "TPM408-2.8",
+            "display_size_inches": 2.8,
+            "native_width": 240,
+            "native_height": 320,
+            "chip_description": "ESP32-D0WD-V3",
+            "chip_revision": "v3.1",
+            "crystal_mhz": 40,
+            "flash_manufacturer": "0x5e",
+            "flash_device": "0x4016",
+            "usb_vid": "1a86",
+            "usb_pid": "7523",
+            "usb_product": "USB Serial",
+            "secure_boot": false,
+            "flash_encryption": false,
+            "firmware_version": "1.2.0",
+            "supplier_url": "https://www.aliexpress.com/item/1005010525144441.html"
+          },
+          "qualification": {
+            "display": true,
+            "touch": true,
+            "flash": null,
+            "update": null,
+            "usb_reset": true
+          },
+          "notes": [
+            "PCB markings and both USB connector types reported by the owner; the module appears WROOM-style, with no verified module manufacturer.",
+            "Owner confirmed display and touch operation with Pipkin 1.2.0.",
+            "Display and touch controller compatibility inferred from working drivers; controller silicon was not read back.",
+            "ROM probing reset the board and the Pipkin helper resumed successfully.",
+            "First installation and settings-preserving firmware update were not tested in this qualification session.",
+            "Supplier URL records the owner's purchase source; seller specifications are not qualification evidence."
+          ]
+        }
+      ]
+    }
+  ]
+}
