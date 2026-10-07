@@ -1,6 +1,6 @@
 <h1 align="center">Pipkin CLI</h1>
 
-<p align="center"><strong>Your AI coding allowance, at a glance.</strong></p>
+<p align="center"><strong>Your agentic AI allowance, at a glance.</strong></p>
 
 <p align="center">
   <img src="docs/images/badge-works-with-codex.svg" alt="Works with Codex" height="28">
