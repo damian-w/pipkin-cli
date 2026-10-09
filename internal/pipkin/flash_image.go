@@ -21,9 +21,9 @@ func validateFirmwareImage(image firmwareImage, data []byte, manifest firmwareMa
 	case "partition-table":
 		err = validateFirmwarePartitions(data)
 	case "bootloader", "application":
-		maximum := 0x7000
+		maximum := bootloaderMaxSize
 		if image.Role == "application" {
-			maximum = 1 << 20
+			maximum = applicationMaxSize
 		}
 		if len(data) > maximum {
 			err = errors.New("image exceeds the initial flash region")
@@ -102,33 +102,38 @@ func firmwareCString(data []byte) (string, bool) {
 // read-only flash prefix. It identifies stored firmware, not a running app, and
 // does not replace whole-image verification or the existing-layout check.
 func readPipkinFirmwareVersion(data []byte) (string, bool) {
-	if len(data) < 288 || data[0] != 0xe9 || data[1] < 1 || data[1] > 16 || binary.LittleEndian.Uint16(data[12:14]) != 0 {
+	if len(data) < 288 || data[0] != 0xe9 || data[1] < 1 || data[1] > 16 || binary.LittleEndian.Uint16(data[12:14]) != 0 ||
+		binary.LittleEndian.Uint32(data[28:32]) > applicationMaxSize {
 		return "", false
 	}
-	segmentSize := binary.LittleEndian.Uint32(data[28:32])
-	if segmentSize < 256 || segmentSize > 1<<20 || binary.LittleEndian.Uint32(data[32:36]) != 0xabcd5432 {
-		return "", false
-	}
-	product, productOK := firmwareCString(data[80:112])
-	version, versionOK := firmwareCString(data[48:80])
-	if !productOK || product != "pipkin" || !versionOK || version == "" || strings.TrimSpace(version) != version {
+	product, version, ok := firmwareAppDescription(data)
+	if !ok || product != "pipkin" || version == "" || strings.TrimSpace(version) != version {
 		return "", false
 	}
 	return version, true
 }
 
-func validatePipkinApplication(data []byte, manifest firmwareManifest) error {
-	// ESP-IDF places esp_app_desc_t at the start of the first image segment:
-	// 24-byte image header, 8-byte segment header, then a 256-byte description.
+// firmwareAppDescription reads esp_app_desc_t at the start of the first image
+// segment: a 24-byte image header, an 8-byte segment header, then 256 bytes.
+// Invalid product or version strings are returned empty.
+func firmwareAppDescription(data []byte) (product, version string, ok bool) {
 	if len(data) < 288 || binary.LittleEndian.Uint32(data[28:32]) < 256 || binary.LittleEndian.Uint32(data[32:36]) != 0xabcd5432 {
+		return "", "", false
+	}
+	product, _ = firmwareCString(data[80:112])
+	version, _ = firmwareCString(data[48:80])
+	return product, version, true
+}
+
+func validatePipkinApplication(data []byte, manifest firmwareManifest) error {
+	product, version, ok := firmwareAppDescription(data)
+	if !ok {
 		return errors.New("application is missing its ESP-IDF description")
 	}
-	version, versionOK := firmwareCString(data[48:80])
-	product, productOK := firmwareCString(data[80:112])
-	if !productOK || product != "pipkin" || product != manifest.Product {
+	if product != "pipkin" || product != manifest.Product {
 		return errors.New("application product is not Pipkin")
 	}
-	if !versionOK || version != manifest.Version {
+	if version != manifest.Version {
 		return errors.New("application version differs from the release manifest")
 	}
 	// Pipkin embeds this abbreviated Git revision for its status screen. The
@@ -140,7 +145,7 @@ func validatePipkinApplication(data []byte, manifest firmwareManifest) error {
 }
 
 func validateFirmwarePartitions(data []byte) error {
-	if len(data) != 0xc00 {
+	if len(data) != partitionTableSize {
 		return errors.New("partition table must be an unsigned 3072-byte table")
 	}
 	want := []struct {
@@ -148,9 +153,9 @@ func validateFirmwarePartitions(data []byte) error {
 		offset, size  uint32
 		label         string
 	}{
-		{1, 2, 0x9000, 0x6000, "nvs"},
+		{1, 2, nvsOffset, nvsSize, "nvs"},
 		{1, 1, 0xf000, 0x1000, "phy_init"},
-		{0, 0, 0x10000, 0x100000, "factory"},
+		{0, 0, applicationOffset, applicationMaxSize, "factory"},
 	}
 	for index, expected := range want {
 		entry := data[index*32 : (index+1)*32]

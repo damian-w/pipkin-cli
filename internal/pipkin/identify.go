@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 )
 
 const identifyHelp = `
@@ -39,44 +38,21 @@ type identifyOptions struct {
 
 func parseIdentifyOptions(args []string) (identifyOptions, error) {
 	var options identifyOptions
-	flags := flag.NewFlagSet("identify", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	flags.StringVar(&options.Port, "port", "", "serial port")
-	flags.StringVar(&options.Board, "board", "", "physically confirmed board profile")
-	flags.BoolVar(&options.JSON, "json", false, "local JSON report")
-	flags.BoolVar(&options.Issue, "issue", false, "GitHub issue draft")
-	if err := flags.Parse(args); err != nil {
+	if err := parseOptions("identify", args, func(flags *flag.FlagSet) {
+		flags.StringVar(&options.Port, "port", "", "serial port")
+		flags.StringVar(&options.Board, "board", "", "physically confirmed board profile")
+		flags.BoolVar(&options.JSON, "json", false, "local JSON report")
+		flags.BoolVar(&options.Issue, "issue", false, "GitHub issue draft")
+	}, "port", "board"); err != nil {
 		return options, err
-	}
-	if flags.NArg() != 0 {
-		return options, errors.New("identify takes options only")
-	}
-	var empty string
-	flags.Visit(func(option *flag.Flag) {
-		if (option.Name == "port" || option.Name == "board") && option.Value.String() == "" {
-			empty = option.Name
-		}
-	})
-	if empty != "" {
-		return options, fmt.Errorf("--%s requires a value", empty)
 	}
 	if options.JSON && options.Issue {
 		return options, errors.New("--json and --issue cannot be combined")
 	}
-	if options.Port != "" && (len(options.Port) > 256 || strings.HasPrefix(options.Port, "-") || strings.TrimSpace(options.Port) != options.Port || terminalText(options.Port) != options.Port) {
+	if !validPortOption(options.Port) {
 		return options, errors.New("invalid serial port")
 	}
-	if options.Board != "" {
-		if len(options.Board) > 128 || strings.HasPrefix(options.Board, "-") {
-			return options, errors.New("invalid board profile")
-		}
-		for _, c := range options.Board {
-			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-				return options, errors.New("board profile must contain lowercase letters, digits and hyphens")
-			}
-		}
-	}
-	return options, nil
+	return options, validateIdentifyBoard(options.Board)
 }
 
 // Board inspection has no access to flash reads, writes or erases.
@@ -96,7 +72,6 @@ type identifyUSBInfo struct {
 type identifyBoardInfo struct {
 	Profile           string   `json:"profile,omitempty"`
 	Name              string   `json:"name,omitempty"`
-	Revision          string   `json:"revision,omitempty"`
 	FirmwareProfile   string   `json:"firmware_profile,omitempty"`
 	Status            string   `json:"status"`
 	Candidates        []string `json:"candidates,omitempty"`
@@ -112,24 +87,19 @@ type identifyBoardInfo struct {
 }
 
 type identifyActions struct {
-	prepare       func(context.Context, io.Writer) (boardInspector, error)
-	ports         func() []string
-	identity      func(context.Context, string, time.Duration) (map[string]string, error)
-	running       func() (bool, error)
-	stop, start   func() error
-	validateBoard func(string) error
-	board         func(flashProbe, string) (identifyBoardInfo, error)
-	usb           func(string) identifyUSBInfo
+	boardActions
+	prepare func(context.Context, io.Writer) (boardInspector, error)
+	board   func(flashProbe, string) (identifyBoardInfo, error)
+	usb     func(string) identifyUSBInfo
 }
 
 func defaultIdentifyActions() identifyActions {
 	return identifyActions{
+		boardActions: defaultBoardActions(),
 		prepare: func(ctx context.Context, output io.Writer) (boardInspector, error) {
 			return prepareFlashTool(ctx, output)
 		},
-		ports: candidatePorts, identity: readFlashIdentity,
-		running: helperRunning, stop: stopHelper, start: startHelper,
-		validateBoard: validateIdentifyBoard, board: inspectBoard, usb: readIdentifyUSB,
+		board: inspectBoard, usb: readIdentifyUSB,
 	}
 }
 
@@ -205,81 +175,37 @@ func buildIdentifyReport(port string, usb identifyUSBInfo, probe flashProbe, ide
 }
 
 func runIdentify(ctx context.Context, options identifyOptions, output, progress io.Writer, actions identifyActions) (result error) {
-	if options.Board != "" && actions.validateBoard != nil {
-		if err := actions.validateBoard(options.Board); err != nil {
-			return err
-		}
-	}
-	installation, err := acquireFileLock(installationLockPath())
-	if err != nil {
-		return fmt.Errorf("could not lock installation for board inspection: %w", err)
-	}
-	defer installation.Close()
-	maintenance, err := acquireFileLock(maintenanceLockPath())
-	if err != nil {
-		return fmt.Errorf("another board or firmware operation is in progress: %w", err)
-	}
-	var tool boardInspector
-	var port string
-	resetNeeded, restoreHelper := false, false
-	defer func() {
-		if resetNeeded {
-			cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			resetErr := tool.Reset(cleanup, port)
-			cancel()
-			if resetErr != nil {
-				result = errors.Join(result, fmt.Errorf("could not restart the board; reconnect its USB cable: %w", resetErr))
-			}
-		}
-		if err := maintenance.Close(); err != nil {
-			result = errors.Join(result, err)
-		}
-		// Helper service operations use their own bounded waits, independent of
-		// the caller's cancellation; release maintenance before its startup.
-		if restoreHelper {
-			if err := actions.start(); err != nil {
-				result = errors.Join(result, fmt.Errorf("could not resume the helper; run pipkin start: %w", err))
-			}
-		}
-	}()
-	port, err = selectFlashPort(options.Port, actions.ports())
+	session, err := openBoardSession(actions.boardActions, "board inspection")
 	if err != nil {
 		return err
 	}
+	defer session.close(&result)
+	port, err := selectFlashPort(options.Port, actions.ports())
+	if err != nil {
+		return err
+	}
+	session.port = port
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	if progress == nil {
-		progress = io.Discard
 	}
 	if _, err := fmt.Fprintln(progress, "Inspecting the board; the display will temporarily restart…"); err != nil {
 		return err
 	}
-	tool, err = actions.prepare(ctx, progress)
+	tool, err := actions.prepare(ctx, progress)
 	if err != nil {
 		return fmt.Errorf("could not prepare the board inspection tool: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	running, err := actions.running()
+	identity, err := session.claimPort(ctx)
 	if err != nil {
 		return err
-	}
-	if running {
-		restoreHelper = true // A failed stop may already have interrupted service.
-		if err := actions.stop(); err != nil {
-			return fmt.Errorf("could not release the display connection: %w", err)
-		}
-	}
-	identity, err := actions.identity(ctx, port, 3500*time.Millisecond)
-	if err != nil {
-		return fmt.Errorf("could not inspect %s (check serial permissions and close other serial tools): %w", terminalText(port), err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	resetNeeded = true // A failed or interrupted ROM probe may still reset.
+	session.reset = tool.Reset // A failed or interrupted ROM probe may still reset.
 	probe, err := tool.Probe(ctx, port)
 	if err != nil {
 		return fmt.Errorf("could not inspect the ESP32 bootloader (close other serial tools, or hold BOOT while connecting): %w", err)
@@ -287,18 +213,11 @@ func runIdentify(ctx context.Context, options identifyOptions, output, progress 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	board := identifyBoardInfo{Status: "unconfirmed"}
-	if actions.board != nil {
-		board, err = actions.board(probe, options.Board)
-		if err != nil {
-			return err
-		}
+	board, err := actions.board(probe, options.Board)
+	if err != nil {
+		return err
 	}
-	var usb identifyUSBInfo
-	if actions.usb != nil {
-		usb = actions.usb(port)
-	}
-	report := buildIdentifyReport(port, usb, probe, identity, board)
+	report := buildIdentifyReport(port, actions.usb(port), probe, identity, board)
 	if options.JSON {
 		encoder := json.NewEncoder(output)
 		encoder.SetIndent("", "  ")
@@ -337,7 +256,7 @@ func writeIdentifySummary(output io.Writer, report identifyReport) error {
 	}
 	if report.Board.Profile != "" {
 		fmt.Fprintf(&text, "Board profile:  %s (%s)\n", identifyValue(report.Board.Profile), identifyValue(report.Board.Status))
-		fmt.Fprintf(&text, "Board:          %s\nPCB revision:   %s\nFirmware profile: %s\n", identifyValue(report.Board.Name), identifyValue(report.Board.Revision), identifyValue(report.Board.FirmwareProfile))
+		fmt.Fprintf(&text, "Board:          %s\nFirmware profile: %s\n", identifyValue(report.Board.Name), identifyValue(report.Board.FirmwareProfile))
 	} else {
 		fmt.Fprintln(&text, "Board profile:  Unconfirmed; chip and flash do not identify the PCB")
 	}

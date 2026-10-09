@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -221,43 +220,39 @@ func TestClaudeDesktopLive(t *testing.T) {
 	t.Logf("GUI source=%s session=%v weekly=%v model_windows=%d extra_reported=%t resets_reported=%t", r.Source, r.Session, r.Weekly, len(r.Models), r.ExtraUsage != nil, r.ReportsBanked)
 }
 
-type claudeTestTransport func(*http.Request) (*http.Response, error)
-
-func (f claudeTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 func TestClaudeHTTPTrustBoundary(t *testing.T) {
-	original := usageHTTPClient
-	t.Cleanup(func() { usageHTTPClient = original })
 	account := "11111111-1111-1111-1111-111111111111"
 	org := "22222222-2222-2222-2222-222222222222"
 	credential := claudeCredential{AccessToken: "test-only-token", source: "claude-desktop", identity: account + "|" + org}
 	calls := 0
-	usageHTTPClient = &http.Client{CheckRedirect: original.CheckRedirect, Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+	stubUsageHTTP(t, func(req *http.Request) *http.Response {
 		calls++
 		if req.URL.Scheme != "https" || req.URL.Host != "api.anthropic.com" || req.Method != "GET" || req.Header.Get("Authorization") != "Bearer test-only-token" {
 			t.Fatal("credential sent outside expected read-only endpoint")
 		}
-		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://untrusted.invalid/"}}, Body: io.NopCloser(strings.NewReader("secret response content")), Request: req}, nil
-	})}
+		response := testResponse(req, http.StatusFound, "secret response content")
+		response.Header.Set("Location", "https://untrusted.invalid/")
+		return response
+	})
 	if _, err := fetchClaudeCredentialUsage(context.Background(), credential, "salt"); err == nil || strings.Contains(err.Error(), "secret") || calls != 1 {
 		t.Fatal("redirect or response error leaked data")
 	}
-	usageHTTPClient.Transport = claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+	stubUsageHTTP(t, func(req *http.Request) *http.Response {
 		body := `{"five_hour":{"utilization":10}}`
 		if strings.HasSuffix(req.URL.Path, "profile") {
 			body = `{"account":{"uuid":"33333333-3333-3333-3333-333333333333"},"organization":{"uuid":"` + org + `"}}`
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
+		return testResponse(req, http.StatusOK, body)
 	})
 	if _, err := fetchClaudeCredentialUsage(context.Background(), credential, "salt"); !errors.Is(err, errSignedOut) {
 		t.Fatal("account mismatch was accepted")
 	}
-	usageHTTPClient.Transport = claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+	stubUsageHTTP(t, func(req *http.Request) *http.Response {
 		body := `{"five_hour":{"utilization":10}}`
 		if strings.HasSuffix(req.URL.Path, "profile") {
 			body = `{"account":{"uuid":"` + account + `"},"organization":{"uuid":"` + org + `","organization_type":"claude_max"}}`
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
+		return testResponse(req, http.StatusOK, body)
 	})
 	if r, err := fetchClaudeCredentialUsage(context.Background(), credential, "salt"); err != nil || r.Plan != "max" || strings.Contains(r.Account, account) {
 		t.Fatal("verified account usage failed")

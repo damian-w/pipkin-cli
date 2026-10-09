@@ -1,6 +1,8 @@
 package pipkin
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strings"
@@ -35,6 +37,12 @@ type Reading struct {
 	// ReportsBanked distinguishes an unknown balance (sent as null) from a source without one.
 	ReportsBanked bool   `json:"reports_banked,omitempty"`
 	Banked        *int64 `json:"banked,omitempty"`
+}
+
+// accountDigest identifies an account to the display without revealing it.
+func accountDigest(prefix, salt, account string) string {
+	digest := sha256.Sum256([]byte(salt + account))
+	return prefix + hex.EncodeToString(digest[:8])
 }
 
 func usedTenths(percent float64) int {

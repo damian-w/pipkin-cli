@@ -45,6 +45,28 @@ func usageResponseError(provider string, response *http.Response) error {
 	return &usageRetryError{message: message, RetryAt: retry}
 }
 
+// requestUsage sends a provider request; statusErrors maps provider-specific statuses.
+func requestUsage(request *http.Request, provider string, statusErrors map[int]error) ([]byte, error) {
+	request.Header.Set("Accept", "application/json")
+	response, err := usageHTTPClient.Do(request)
+	if err != nil {
+		return nil, offlineError{provider + " usage request failed; check your connection"}
+	}
+	defer response.Body.Close()
+	if err := statusErrors[response.StatusCode]; err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		// Provider bodies can contain account details. Never forward them to logs.
+		return nil, usageResponseError(provider, response)
+	}
+	data, err := readBounded(response.Body, 1<<20)
+	if err != nil {
+		return nil, errors.New(provider + " usage response is unreadable or too large")
+	}
+	return data, nil
+}
+
 // Requests that never reach the provider are retried sooner than provider errors.
 type offlineError struct{ message string }
 
@@ -90,14 +112,6 @@ func providerMessage(err error) string {
 	return err.Error()
 }
 
-func (s *Status) setProviderError(provider string, err error) {
-	if provider == "codex" {
-		s.CodexError = providerMessage(err)
-	} else if provider == "claude" {
-		s.ClaudeError = providerMessage(err)
-	}
-}
-
 func (s Status) providerError(provider string) string {
 	if provider == "codex" {
 		return s.CodexError
@@ -109,10 +123,7 @@ func (s Status) providerError(provider string) string {
 }
 
 func usageCommand(args []string) error {
-	jsonOutput := len(args) == 1 && args[0] == "--json"
-	if len(args) > 0 && !jsonOutput {
-		return errors.New("usage: pipkin usage [--json]")
-	}
+	jsonOutput := len(args) == 1
 	now := time.Now()
 	config, err := initializedConfig()
 	if err != nil {
@@ -123,12 +134,14 @@ func usageCommand(args []string) error {
 		go func() { results <- collectProvider(context.Background(), provider, config.Salt) }()
 	}
 	status := Status{SchemaVersion: 1, States: map[string]string{}, Version: version, Readings: map[string]*Reading{}, Updated: now.Unix()}
+	messages := map[string]string{}
 	for range providers {
 		result := <-results
 		status.Readings[result.provider] = result.reading
 		status.States[result.provider] = providerState(result.err)
-		status.setProviderError(result.provider, result.err)
+		messages[result.provider] = providerMessage(result.err)
 	}
+	status.CodexError, status.ClaudeError = messages["codex"], messages["claude"]
 	if jsonOutput {
 		return printJSON(status)
 	}

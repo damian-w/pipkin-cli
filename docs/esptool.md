@@ -1,6 +1,6 @@
 # Flashing tool
 
-`pipkin flash` downloads [Espressif's official esptool v5.4.0 release](https://github.com/espressif/esptool/releases/tag/v5.4.0)
+`pipkin flash` and `pipkin identify` download [Espressif's official esptool v5.4.0 release](https://github.com/espressif/esptool/releases/tag/v5.4.0)
 when it is first needed. Python and ESP-IDF are not required. The Go CLI remains a
 single executable; esptool runs separately from its private `tools` directory in
 Pipkin's application directory.

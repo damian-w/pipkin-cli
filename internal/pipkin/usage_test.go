@@ -14,23 +14,37 @@ import (
 	"time"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// stubUsageHTTP answers provider requests in-process, keeping the production redirect policy.
+func stubUsageHTTP(t *testing.T, respond func(*http.Request) *http.Response) {
+	t.Helper()
+	original := usageHTTPClient
+	t.Cleanup(func() { usageHTTPClient = original })
+	usageHTTPClient = &http.Client{CheckRedirect: original.CheckRedirect,
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) { return respond(req), nil })}
+}
+
+func testResponse(req *http.Request, status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}
+}
+
 func TestCollectionPreservesQuotaAndHandlesSignOut(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CODEX_HOME", dir)
 	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"tokens":{"access_token":"test-token"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	previous := usageHTTPClient
-	t.Cleanup(func() { usageHTTPClient = previous })
 	for _, status := range []int{http.StatusOK, http.StatusUnauthorized} {
-		usageHTTPClient = &http.Client{Transport: codexTestTransport(func(req *http.Request) (*http.Response, error) {
+		stubUsageHTTP(t, func(req *http.Request) *http.Response {
 			deadline, bounded := req.Context().Deadline()
 			if !bounded || time.Until(deadline) > 45*time.Second || time.Until(deadline) <= 0 {
 				t.Fatal("collection must have a live, bounded context")
 			}
-			body := `{"rate_limit":{"secondary_window":{"used_percent":25,"limit_window_seconds":604800}}}`
-			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
-		})}
+			return testResponse(req, status, `{"rate_limit":{"secondary_window":{"used_percent":25,"limit_window_seconds":604800}}}`)
+		})
 		result := collectProvider(context.Background(), "codex", "test-salt")
 		if result.provider != "codex" || result.reading == nil {
 			t.Fatalf("collection = %+v", result)
@@ -53,17 +67,14 @@ func TestProviderClassificationAndErrorProjection(t *testing.T) {
 		if got := providerState(item.err); got != item.state {
 			t.Fatalf("state = %q, want %q", got, item.state)
 		}
-		var status Status
-		status.setProviderError("codex", item.err)
-		status.setProviderError("claude", item.err)
+		status := Status{CodexError: providerMessage(item.err), ClaudeError: providerMessage(item.err)}
 		for _, provider := range providers {
 			if got := status.providerError(provider); got != providerMessage(item.err) {
 				t.Fatalf("%s error = %q", provider, got)
 			}
 		}
-		status.setProviderError("codex", nil)
-		if status.CodexError != "" || status.providerError("unknown") != "" {
-			t.Fatal("error projection retained an old error")
+		if status.providerError("unknown") != "" {
+			t.Fatal("unknown provider reported an error")
 		}
 	}
 }

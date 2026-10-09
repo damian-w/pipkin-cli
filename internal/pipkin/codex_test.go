@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -186,24 +185,18 @@ func TestCodexMalformedWindowDoesNotImplyNoCap(t *testing.T) {
 	}
 }
 
-type codexTestTransport func(*http.Request) (*http.Response, error)
-
-func (fn codexTestTransport) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
-
 func TestCodexRequestKeepsCredentialsPrivate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CODEX_HOME", dir)
 	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"tokens":{"access_token":"private-token","account_id":"private-account"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	previous := usageHTTPClient
-	t.Cleanup(func() { usageHTTPClient = previous })
-	usageHTTPClient = &http.Client{Transport: codexTestTransport(func(req *http.Request) (*http.Response, error) {
+	stubUsageHTTP(t, func(req *http.Request) *http.Response {
 		if req.URL.String() != codexUsageURL || req.Method != http.MethodGet || req.Header.Get("Authorization") != "Bearer private-token" || req.Header.Get("ChatGPT-Account-Id") != "private-account" {
 			t.Fatal("credential request destination or headers incorrect")
 		}
-		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":"private-token private-account"}`))}, nil
-	})}
+		return testResponse(req, http.StatusUnauthorized, `{"error":"private-token private-account"}`)
+	})
 	_, err := fetchCodexUsage(context.Background(), "test-salt")
 	if !errors.Is(err, errSignedOut) || strings.Contains(err.Error(), "private") {
 		t.Fatal("expired sign-in must be identifiable without exposing provider body")

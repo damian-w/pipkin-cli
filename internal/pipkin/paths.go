@@ -65,6 +65,17 @@ func serviceBinary() string {
 	return installedBinary()
 }
 
+// Keep these locks beside the installation so uninstall cannot replace them.
+func siblingLockPath(name string) string {
+	dir := filepath.Clean(appDir())
+	return filepath.Join(filepath.Dir(dir), "."+filepath.Base(dir)+"-"+name+".lock")
+}
+
+func installationLockPath() string { return siblingLockPath("installation") }
+
+// maintenanceLockPath serializes firmware and board operations with helper startup.
+func maintenanceLockPath() string { return siblingLockPath("flash") }
+
 func launcherPath() string { return filepath.Join(homeDir(), ".local", "bin", "pipkin") }
 
 func configPath() string   { return filepath.Join(appDir(), "config.json") }

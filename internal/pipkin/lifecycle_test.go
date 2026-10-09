@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -40,19 +39,17 @@ func TestHelperLockDistinguishesContentionFromIOFailure(t *testing.T) {
 	}
 }
 
-func TestHelperPIDOwnershipAndLegacyCompatibility(t *testing.T) {
+func TestHelperPIDOwnership(t *testing.T) {
 	t.Setenv("PIPKIN_HOME", t.TempDir())
 	lock, err := lockInstance()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	originalInspect, originalTerminate := inspectProcess, terminateProcess
-	t.Cleanup(func() { inspectProcess, terminateProcess = originalInspect, originalTerminate })
+	original := inspectProcess
+	t.Cleanup(func() { inspectProcess = original })
 	identity := processIdentity{Started: "original-start", Executable: installedBinary()}
 	inspectProcess = func(int) (processIdentity, error) { return identity, nil }
-	terminated := false
-	terminateProcess = func(int) error { terminated = true; return nil }
 	if _, err := runningPID(); !errors.Is(err, errHelperStarting) {
 		t.Fatalf("unpublished PID = %v", err)
 	}
@@ -63,20 +60,15 @@ func TestHelperPIDOwnershipAndLegacyCompatibility(t *testing.T) {
 		t.Fatalf("valid PID = %d, %v", pid, err)
 	}
 	identity.Started = "reused-pid"
-	if err := terminateHelper(42); err == nil || terminated {
-		t.Fatal("signalled reused PID")
+	if _, err := runningPID(); err == nil {
+		t.Fatal("accepted reused PID")
 	}
-	if err := os.WriteFile(pidPath(), []byte("42"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if pid, err := runningPID(); err != nil || pid != 42 {
-		t.Fatalf("legacy helper = %d, %v", pid, err)
-	}
+	identity.Started = "original-start"
 	identity.Executable = filepath.Join(t.TempDir(), "unrelated")
-	if err := terminateHelper(42); err == nil || terminated {
-		t.Fatal("signalled unrelated legacy PID")
+	if _, err := runningPID(); err == nil {
+		t.Fatal("accepted unrelated executable")
 	}
-	for _, invalid := range []string{"-1", "0", "garbage", `{"pid":42,"started":"only-start"}`} {
+	for _, invalid := range []string{"42", "-1", "garbage", `{"pid":0,"started":"original-start"}`, `{"pid":-1,"started":"original-start"}`, `{"pid":42,"started":"only-start"}`} {
 		if err := os.WriteFile(pidPath(), []byte(invalid), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -107,16 +99,6 @@ func TestPublishPIDRequiresWritableRecordAndMatchesCurrentProcess(t *testing.T) 
 	}
 	if err := publishPID(); err == nil {
 		t.Fatal("ignored failed PID publication")
-	}
-}
-
-func TestLegacyPIDCannotBeNegative(t *testing.T) {
-	t.Setenv("PIPKIN_HOME", t.TempDir())
-	if err := os.WriteFile(pidPath(), []byte(strconv.Itoa(-1)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readPIDRecord(); err == nil {
-		t.Fatal("negative PID accepted")
 	}
 }
 

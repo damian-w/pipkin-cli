@@ -2,8 +2,6 @@ package pipkin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,26 +24,15 @@ func fetchCodexUsage(ctx context.Context, salt string) (*Reading, error) {
 		return nil, errors.New("could not prepare Codex usage request")
 	}
 	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Pipkin/"+version)
 	if auth.AccountID != "" {
 		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
 	}
-	response, err := usageHTTPClient.Do(req)
+	data, err := requestUsage(req, "Codex", map[int]error{
+		http.StatusUnauthorized: fmt.Errorf("Codex sign-in needs refreshing in the Codex app: %w", errSignedOut),
+	})
 	if err != nil {
-		return nil, offlineError{"Codex usage request failed; check your connection"}
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("Codex sign-in needs refreshing in the Codex app: %w", errSignedOut)
-	}
-	if response.StatusCode != http.StatusOK {
-		// Provider bodies can contain account details. Never forward them to logs.
-		return nil, usageResponseError("Codex", response)
-	}
-	data, err := readBounded(response.Body, 1<<20)
-	if err != nil {
-		return nil, errors.New("could not read Codex usage response")
+		return nil, err
 	}
 	reading, err := parseCodexUsage(data, auth.AccountID, salt, time.Now().Unix())
 	if reading != nil {
@@ -103,8 +90,7 @@ func parseCodexUsage(data []byte, account, salt string, observed int64) (*Readin
 		account = payload.AccountID
 	}
 	if account != "" {
-		sum := sha256.Sum256([]byte(salt + account))
-		r.Account = "c" + hex.EncodeToString(sum[:8])
+		r.Account = accountDigest("c", salt, account)
 	}
 	if credits := payload.Credits; credits != nil {
 		r.Credits = &Credits{HasCredits: credits.HasCredits, Unlimited: credits.Unlimited,

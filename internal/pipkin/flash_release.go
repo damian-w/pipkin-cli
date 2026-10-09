@@ -19,6 +19,19 @@ import (
 
 const firmwareRepository = "damian-w/pipkin"
 
+// The single-app ESP-IDF layout (esp32-single-app-v1) this CLI installs. Board
+// settings live in NVS, between the partition table and the application.
+const (
+	bootloaderOffset     = 0x1000
+	bootloaderMaxSize    = 0x7000
+	partitionTableOffset = 0x8000
+	partitionTableSize   = 0xc00
+	nvsOffset            = 0x9000
+	nvsSize              = 0x6000
+	applicationOffset    = 0x10000
+	applicationMaxSize   = 1 << 20
+)
+
 var stableFirmwareVersion = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 var firmwareSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var firmwareRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -101,9 +114,9 @@ func validateFirmwareManifest(m firmwareManifest, tag, cliVersion string) error 
 		file        string
 		offset, max int64
 	}{
-		"bootloader":      {"bootloader.bin", 0x1000, 0x7000},
-		"partition-table": {"partition-table.bin", 0x8000, 0xc00},
-		"application":     {"pipkin.bin", 0x10000, 1 << 20},
+		"bootloader":      {"bootloader.bin", bootloaderOffset, bootloaderMaxSize},
+		"partition-table": {"partition-table.bin", partitionTableOffset, partitionTableSize},
+		"application":     {"pipkin.bin", applicationOffset, applicationMaxSize},
 	}
 	seen := map[string]bool{}
 	for _, image := range m.Images {
@@ -111,7 +124,7 @@ func validateFirmwareManifest(m firmwareManifest, tag, cliVersion string) error 
 		if !ok || seen[image.Role] || image.File != expected.file || image.Offset != expected.offset || image.Size <= 0 || image.Size > expected.max || !firmwareSHA256.MatchString(image.SHA256) {
 			return fmt.Errorf("invalid or unsupported %s firmware image", terminalText(image.Role))
 		}
-		if image.Role == "partition-table" && image.Size != 0xc00 {
+		if image.Role == "partition-table" && image.Size != partitionTableSize {
 			return errors.New("release partition table has an unsupported size")
 		}
 		seen[image.Role] = true
@@ -139,25 +152,15 @@ func (s firmwareSource) get(ctx context.Context, url string, limit int64) ([]byt
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("User-Agent", "pipkin/"+version)
-	response, err := s.client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound {
-		return nil, errors.New("no published firmware release or required release asset found")
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("firmware download returned HTTP %d", response.StatusCode)
-	}
-	if response.ContentLength > limit {
-		return nil, errReadTooLarge
-	}
 	var data bytes.Buffer
-	if err := copyBounded(&data, response.Body, limit); err != nil {
-		return nil, err
+	err = download(s.client, request, &data, limit)
+	if status := (*httpStatusError)(nil); errors.As(err, &status) {
+		if status.Code == http.StatusNotFound {
+			return nil, errors.New("no published firmware release or required release asset found")
+		}
+		return nil, fmt.Errorf("firmware download returned HTTP %d", status.Code)
 	}
-	return data.Bytes(), nil
+	return data.Bytes(), err
 }
 
 func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, parent string) (_ *firmwareRelease, err error) {
@@ -217,8 +220,7 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, 
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256(manifestData)
-	if sums["firmware.json"] != hex.EncodeToString(digest[:]) {
+	if sums["firmware.json"] != sha256Hex(manifestData) {
 		return nil, errors.New("firmware manifest failed its release checksum")
 	}
 	var manifest firmwareManifest
@@ -254,8 +256,7 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, 
 		if err != nil {
 			return nil, err
 		}
-		digest := sha256.Sum256(data)
-		if int64(len(data)) != image.Size || hex.EncodeToString(digest[:]) != image.SHA256 {
+		if int64(len(data)) != image.Size || sha256Hex(data) != image.SHA256 {
 			return nil, fmt.Errorf("%s failed its release checksum or size check", image.File)
 		}
 		if err := validateFirmwareImage(image, data, manifest); err != nil {
@@ -295,4 +296,9 @@ func newerStableFirmware(candidate, current string) bool {
 		}
 	}
 	return false
+}
+
+func sha256Hex(data []byte) string {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }

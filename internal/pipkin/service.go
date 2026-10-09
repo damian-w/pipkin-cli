@@ -59,24 +59,17 @@ func helperRunning() (bool, error) {
 }
 
 func waitFor(condition func() (bool, error), timeout time.Duration) error {
-	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
+	deadline := time.Now().Add(timeout)
+	for {
 		ready, err := condition()
-		if err != nil {
+		if err != nil || ready {
 			return err
 		}
-		if ready {
-			return nil
+		if !time.Now().Before(deadline) {
+			return errors.New("timed out waiting for the helper")
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	ready, err := condition()
-	if err != nil {
-		return err
-	}
-	if !ready {
-		return errors.New("timed out waiting for the helper")
-	}
-	return nil
 }
 
 func startDetachedHelper() error {
@@ -92,11 +85,10 @@ func startHelper() error {
 	if err != nil {
 		return err
 	}
-	if running {
-		return waitFor(helperReady, 6*time.Second)
-	}
-	if err := startService(); err != nil {
-		return err
+	if !running {
+		if err := startService(); err != nil {
+			return err
+		}
 	}
 	return waitFor(helperReady, 6*time.Second)
 }
@@ -121,7 +113,7 @@ func stopHelper() error {
 		if current, err := runningPID(); err != nil {
 			terminateErr = err
 		} else if current == pid {
-			terminateErr = terminateHelper(pid)
+			terminateErr = terminateProcess(pid)
 		}
 	}
 	waitErr := waitFor(func() (bool, error) {

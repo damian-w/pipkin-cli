@@ -8,17 +8,12 @@ import (
 )
 
 func candidatePorts() []string {
-	seen := map[string]bool{}
 	var ports []string
+	// These name prefixes are disjoint, so no port matches twice.
 	for _, pattern := range []string{"/dev/cu.usbserial*", "/dev/cu.wchusbserial*",
 		"/dev/cu.SLAB_USBtoUART*", "/dev/cu.usbmodem*"} {
 		matches, _ := filepath.Glob(pattern)
-		for _, match := range matches {
-			if !seen[match] {
-				seen[match] = true
-				ports = append(ports, match)
-			}
-		}
+		ports = append(ports, matches...)
 	}
 	sort.Strings(ports)
 	return ports

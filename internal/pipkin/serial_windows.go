@@ -24,11 +24,14 @@ func openSerial(name string) (serialPort, error) {
 	if err != nil {
 		return nil, err
 	}
+	fail := func(err error) (serialPort, error) {
+		windows.CloseHandle(handle)
+		return nil, err
+	}
 	var dcb windows.DCB
 	dcb.DCBlength = uint32(unsafe.Sizeof(dcb))
 	if err := windows.GetCommState(handle, &dcb); err != nil {
-		windows.CloseHandle(handle)
-		return nil, err
+		return fail(err)
 	}
 	dcb.BaudRate = 115200
 	dcb.ByteSize = 8
@@ -39,12 +42,10 @@ func openSerial(name string) (serialPort, error) {
 	// process the sleep report and acknowledge it before the host suspends.
 	timeouts := windows.CommTimeouts{ReadIntervalTimeout: 0xFFFFFFFF, WriteTotalTimeoutConstant: 500}
 	if err := windows.SetCommState(handle, &dcb); err != nil {
-		windows.CloseHandle(handle)
-		return nil, err
+		return fail(err)
 	}
 	if err := windows.SetCommTimeouts(handle, &timeouts); err != nil {
-		windows.CloseHandle(handle)
-		return nil, err
+		return fail(err)
 	}
 	return &windowsPort{handle}, nil
 }

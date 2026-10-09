@@ -23,6 +23,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const claudeDesktopSource = "claude-desktop"
+
 type claudeCredential struct {
 	AccessToken      string   `json:"accessToken"`
 	ExpiresAt        float64  `json:"expiresAt"`
@@ -50,7 +52,7 @@ func (config claudeDesktopConfig) signedIn() bool {
 
 func readClaudeDesktopConfig(dir string) (claudeDesktopConfig, error) {
 	var config claudeDesktopConfig
-	raw, err := readClaudeFile(filepath.Join(dir, "config.json"))
+	raw, err := readFileBounded(filepath.Join(dir, "config.json"), maxClaudeFileSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return config, err
 	}
@@ -84,10 +86,6 @@ func claudeDesktopSignedIn() bool {
 		}
 	}
 	return false
-}
-
-func readClaudeFile(path string) ([]byte, error) {
-	return readCredentialFile(path, 4<<20, "Claude credential file is unreadable or too large")
 }
 
 func loadClaudeCredential(ctx context.Context) (claudeCredential, error) {
@@ -126,14 +124,10 @@ func loadClaudeCredentialFor(ctx context.Context, goos string,
 		if goos == "darwin" && codeErr == nil {
 			// Desktop's account UUID is unencrypted. Verify Code belongs to it
 			// before avoiding the separate Safe Storage permission request.
-			profile, err := requestClaudeUsage(ctx, code.AccessToken, "profile")
+			profile, err := fetchClaudeProfile(ctx, code.AccessToken)
 			profileErr = err
-			var account claudeAccountProfile
-			if err == nil && json.Unmarshal(profile, &account) == nil &&
-				validClaudeUUID(account.Account.UUID) && validClaudeUUID(account.Organization.UUID) &&
-				strings.EqualFold(config.AccountUUID, account.Account.UUID) {
-				code.identity = strings.ToLower(account.Account.UUID + "|" + account.Organization.UUID)
-				code.profile = &account
+			if profile != nil && strings.EqualFold(config.AccountUUID, profile.Account.UUID) {
+				code.identity, code.profile = profile.identity(), profile
 				return code, nil
 			}
 		}
@@ -171,7 +165,7 @@ func loadClaudeCodeCredential(ctx context.Context) (claudeCredential, error) {
 			}
 		}
 	}
-	raw, err := readClaudeFile(filepath.Join(claudeConfig(), ".credentials.json"))
+	raw, err := readFileBounded(filepath.Join(claudeConfig(), ".credentials.json"), maxClaudeFileSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return zero, fmt.Errorf("Claude: %w", errSignedOut)
 	}
@@ -202,7 +196,7 @@ func loadClaudeDesktopCredential(ctx context.Context, dir string, config claudeD
 		return claudeCredential{}, err
 	}
 	credential, err := selectClaudeDesktopToken(caches[0], caches[1], account, org, time.Now())
-	credential.source = "claude-desktop"
+	credential.source = claudeDesktopSource
 	credential.identity = strings.ToLower(account) + "|" + org
 	if runtime.GOOS == "windows" {
 		credential.desktopDir = dir
@@ -326,10 +320,18 @@ func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]by
 			return "", err
 		}
 		path := filepath.Join(dir, relative)
-		info, err := os.Stat(path)
+		// Preserve native sharing/access errors before SQLite reduces them to
+		// a generic cannot-open code. This does not override the owner's lock.
+		file, err := os.Open(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		if err != nil {
+			record(claudeCookieReadError(err))
+			continue
+		}
+		info, err := file.Stat()
+		file.Close()
 		if err != nil {
 			record(claudeCookieReadError(err))
 			continue
@@ -338,71 +340,8 @@ func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]by
 			record(errClaudeOrgStorage)
 			continue
 		}
-		// Preserve native sharing/access errors before SQLite reduces them to
-		// a generic cannot-open code. This does not override the owner's lock.
-		file, err := os.Open(path)
-		if err != nil {
-			record(claudeCookieReadError(err))
-			continue
-		}
-		file.Close()
-		uriPath := filepath.ToSlash(path)
-		if len(uriPath) > 1 && uriPath[1] == ':' {
-			uriPath = "/" + uriPath
-		}
-		address := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
-		db, err := sql.Open("sqlite", address.String())
-		if err != nil {
-			record(errClaudeOrgStorage)
-			continue
-		}
-		rows, err := db.QueryContext(ctx, "SELECT host_key,value,encrypted_value FROM cookies WHERE name='lastActiveOrg' AND host_key IN ('.claude.ai','claude.ai') ORDER BY last_update_utc DESC")
-		if err != nil {
-			db.Close()
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			record(errClaudeOrgStorage)
-			continue
-		}
-		for rows.Next() {
-			var host, value string
-			var encrypted []byte
-			if rows.Scan(&host, &value, &encrypted) != nil {
-				record(errClaudeOrgStorage)
-				continue
-			}
-			if value == "" {
-				clear, err := decrypt(encrypted)
-				if err != nil {
-					rows.Close()
-					db.Close()
-					return "", err
-				}
-				hash := sha256.Sum256([]byte(host))
-				if bytes.HasPrefix(clear, hash[:]) {
-					clear = clear[len(hash):]
-				}
-				value = string(clear)
-			}
-			if validClaudeUUID(value) {
-				rows.Close()
-				db.Close()
-				if err := ctx.Err(); err != nil {
-					return "", err
-				}
-				return strings.ToLower(value), nil
-			}
-			record(errClaudeOrgInvalid)
-		}
-		rowErr := rows.Err()
-		rows.Close()
-		db.Close()
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		if rowErr != nil {
-			record(errClaudeOrgStorage)
+		if org, err := queryClaudeOrgCookie(ctx, path, decrypt, record); err != nil || org != "" {
+			return org, err
 		}
 	}
 	if invalid != nil {
@@ -412,6 +351,61 @@ func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]by
 		return "", unavailable
 	}
 	return "", errClaudeOrgMissing
+}
+
+// queryClaudeOrgCookie reads one cookie database. It returns an org or a fatal
+// error; other failures are recorded so the next database can be tried.
+func queryClaudeOrgCookie(ctx context.Context, path string, decrypt func([]byte) ([]byte, error), record func(error)) (string, error) {
+	uriPath := filepath.ToSlash(path)
+	if len(uriPath) > 1 && uriPath[1] == ':' {
+		uriPath = "/" + uriPath
+	}
+	address := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", address.String())
+	if err != nil {
+		record(errClaudeOrgStorage)
+		return "", nil
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, "SELECT host_key,value,encrypted_value FROM cookies WHERE name='lastActiveOrg' AND host_key IN ('.claude.ai','claude.ai') ORDER BY last_update_utc DESC")
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		record(errClaudeOrgStorage)
+		return "", nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var host, value string
+		var encrypted []byte
+		if rows.Scan(&host, &value, &encrypted) != nil {
+			record(errClaudeOrgStorage)
+			continue
+		}
+		if value == "" {
+			plain, err := decrypt(encrypted)
+			if err != nil {
+				return "", err
+			}
+			hash := sha256.Sum256([]byte(host))
+			value = string(bytes.TrimPrefix(plain, hash[:]))
+		}
+		if validClaudeUUID(value) {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			return strings.ToLower(value), nil
+		}
+		record(errClaudeOrgInvalid)
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if rows.Err() != nil {
+		record(errClaudeOrgStorage)
+	}
+	return "", nil
 }
 
 func validClaudeUUID(s string) bool {
@@ -460,7 +454,7 @@ func parseClaudeCacheKey(text, account string) (claudeCacheKey, bool) {
 	return claudeCacheKey{strings.ToLower(client), strings.ToLower(org), slices.Compact(scopes)}, true
 }
 
-// Scoped entries and V2 tombstones override older aliases, even if the old token is valid.
+// Scoped entries override older aliases, even if the old token is valid.
 func normalizedClaudeCache(cache map[string]json.RawMessage, account string) map[string]claudeCacheEntry {
 	normalized := make(map[string]claudeCacheEntry)
 	keys := slices.Sorted(maps.Keys(cache))
@@ -483,6 +477,7 @@ func normalizedClaudeCache(cache map[string]json.RawMessage, account string) map
 func selectClaudeDesktopToken(v2, v1 map[string]json.RawMessage, account, org string, now time.Time) (claudeCredential, error) {
 	newest := normalizedClaudeCache(v2, account)
 	older := normalizedClaudeCache(v1, account)
+	// V2 entries, including expired tombstones, override their V1 aliases.
 	for key := range newest {
 		delete(older, key)
 	}

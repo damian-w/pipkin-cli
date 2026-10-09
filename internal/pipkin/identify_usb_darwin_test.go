@@ -69,7 +69,7 @@ func TestIdentifyUSBPlistRejectsConflictingPortMatches(t *testing.T) {
 }
 
 func TestIdentifyUSBOutputBound(t *testing.T) {
-	var output identifyUSBOutput
+	output := cappedBuffer{limit: identifyUSBOutputLimit}
 	input := []byte(strings.Repeat("x", identifyUSBOutputLimit+100))
 	if n, err := output.Write(input); err != nil || n != len(input) {
 		t.Fatalf("write returned %d, %v", n, err)

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,13 @@ const (
 var errFlashProcessCleanup = errors.New("could not stop all flashing-tool processes")
 
 type flashToolAsset struct{ Platform, Archive, SHA256 string }
+
+func (a flashToolAsset) binary() string {
+	if strings.HasPrefix(a.Platform, "windows-") {
+		return "esptool.exe"
+	}
+	return "esptool"
+}
 
 // Archive digests published by GitHub's v5.4.0 release-assets API. The helper
 // is pinned separately from firmware and downloaded directly from Espressif.
@@ -102,9 +110,6 @@ func prepareFlashTool(ctx context.Context, output io.Writer) (*flashTool, error)
 }
 
 func prepareFlashToolAsset(ctx context.Context, output io.Writer, cache string, asset flashToolAsset, client *http.Client, url string) (*flashTool, error) {
-	if output == nil {
-		output = io.Discard
-	}
 	archive := filepath.Join(cache, asset.Archive)
 	if err := verifyToolArchive(archive, asset.SHA256); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -135,16 +140,12 @@ func prepareFlashToolAsset(ctx context.Context, output io.Writer, cache string, 
 			return nil, err
 		}
 	}
-	binary := "esptool"
-	if strings.HasPrefix(asset.Platform, "windows-") {
-		binary += ".exe"
-	}
-	tool := &flashTool{path: filepath.Join(destination, binary), output: output}
+	tool := &flashTool{path: filepath.Join(destination, asset.binary()), output: output}
 	data, err := tool.run(ctx, 30*time.Second, "version")
 	if err != nil {
 		return nil, fmt.Errorf("could not start the flashing tool: %w", err)
 	}
-	if !regexp.MustCompile(`(?m)^5\.4\.0\s*$`).Match(data) {
+	if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(flashToolVersion) + `\s*$`).Match(data) {
 		return nil, errors.New("flashing tool returned an unexpected version")
 	}
 	return tool, nil
@@ -181,34 +182,16 @@ func downloadToolArchive(parent context.Context, client *http.Client, url, desti
 		return err
 	}
 	request.Header.Set("User-Agent", "pipkin-cli-flash")
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("could not download esptool: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("could not download esptool: HTTP %d", response.StatusCode)
-	}
-	if response.ContentLength > maxToolArchiveBytes {
-		return errors.New("esptool download exceeds the size limit")
-	}
 	file, err := os.CreateTemp(filepath.Dir(destination), ".esptool-download-")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(file.Name())
 	hash := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxToolArchiveBytes+1))
-	closeErr := file.Close()
-	if copyErr != nil {
-		return copyErr
+	if err := errors.Join(download(client, request, io.MultiWriter(file, hash), maxToolArchiveBytes), file.Close()); err != nil {
+		return fmt.Errorf("could not download esptool: %w", err)
 	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if n <= 0 || n > maxToolArchiveBytes {
-		return errors.New("esptool download exceeds the size limit or is empty")
-	}
+	// The pinned digest also rejects an empty download.
 	if hex.EncodeToString(hash.Sum(nil)) != expected {
 		return errors.New("esptool download failed SHA-256 verification")
 	}
@@ -219,11 +202,7 @@ func downloadToolArchive(parent context.Context, client *http.Client, url, desti
 }
 
 func wantedToolFiles(asset flashToolAsset) map[string]bool {
-	binary := "esptool"
-	if strings.HasPrefix(asset.Platform, "windows-") {
-		binary += ".exe"
-	}
-	return map[string]bool{binary: true, "LICENSE": true, "README.md": true}
+	return map[string]bool{asset.binary(): true, "LICENSE": true, "README.md": true}
 }
 
 func safeToolEntry(name string, asset flashToolAsset) (string, error) {
@@ -275,7 +254,7 @@ func extractFlashTool(ctx context.Context, archive, dir string, asset flashToolA
 			return err
 		}
 		mode := os.FileMode(0o600)
-		if relative == "esptool" || relative == "esptool.exe" {
+		if relative == asset.binary() {
 			mode = 0o700
 		}
 		file, err := os.OpenFile(filepath.Join(dir, relative), os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
@@ -305,9 +284,6 @@ func extractFlashTool(ctx context.Context, archive, dir string, asset flashToolA
 			return errors.New("too many esptool archive entries")
 		}
 		for _, entry := range reader.File {
-			if entry.UncompressedSize64 > uint64(maxToolFileBytes) {
-				return errors.New("oversized esptool archive entry")
-			}
 			content, err := entry.Open()
 			if err != nil {
 				return err
@@ -392,22 +368,6 @@ func sameToolFiles(source, destination string, asset flashToolAsset) bool {
 	return true
 }
 
-type flashOutput struct {
-	bytes.Buffer
-	truncated bool
-}
-
-func (b *flashOutput) Write(data []byte) (int, error) {
-	n := len(data)
-	remaining := maxToolOutputBytes - b.Len()
-	if len(data) > remaining {
-		data = data[:remaining]
-		b.truncated = true
-	}
-	_, _ = b.Buffer.Write(data)
-	return n, nil
-}
-
 func (t *flashTool) run(parent context.Context, timeout time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -439,7 +399,7 @@ func (t *flashTool) run(parent context.Context, timeout time.Duration, args ...s
 		command.Env = append(command.Env, value)
 	}
 	command.Env = append(command.Env, "NO_COLOR=1", "ESPTOOL_CFGFILE="+config.Name())
-	var output flashOutput
+	output := cappedBuffer{limit: maxToolOutputBytes}
 	command.Stdout, command.Stderr = &output, &output
 	command.WaitDelay = 2 * time.Second
 	err = runFlashProcess(command)
@@ -636,21 +596,12 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 	// Explicit baseline options prevent host esptool configuration from changing
 	// image headers. Individual files leave intervening NVS sectors untouched.
 	options := []string{"--flash-mode", "dio", "--flash-freq", "40m", "--flash-size", "4MB"}
-	write := append(append(append([]string{}, args...), "write-flash"), options...)
-	write = append(write, "--no-progress")
-	write = append(write, pairs...)
-	if t.output != nil {
-		fmt.Fprintln(t.output, "Writing firmware…")
-	}
-	if _, err := t.run(ctx, 3*time.Minute, write...); err != nil {
+	fmt.Fprintln(t.output, "Writing firmware…")
+	if _, err := t.run(ctx, 3*time.Minute, slices.Concat(args, []string{"write-flash"}, options, []string{"--no-progress"}, pairs)...); err != nil {
 		return err
 	}
-	verify := append(append(append([]string{}, args...), "verify-flash"), options...)
-	verify = append(verify, pairs...)
-	if t.output != nil {
-		fmt.Fprintln(t.output, "Verifying firmware…")
-	}
-	_, err = t.run(ctx, 2*time.Minute, verify...)
+	fmt.Fprintln(t.output, "Verifying firmware…")
+	_, err = t.run(ctx, 2*time.Minute, slices.Concat(args, []string{"verify-flash"}, options, pairs)...)
 	return err
 }
 
@@ -674,9 +625,8 @@ func (t *flashTool) EraseSettings(ctx context.Context, port string) error {
 	if err != nil {
 		return err
 	}
-	// ESP-IDF's fixed single-app baseline has NVS at 0x9000, size 0x6000.
 	// Only first installs explicitly approved by the caller use this operation.
-	args = append(args, "--chip", "esp32", "erase-region", "0x9000", "0x6000")
+	args = append(args, "--chip", "esp32", "erase-region", fmt.Sprintf("0x%x", nvsOffset), fmt.Sprintf("0x%x", nvsSize))
 	_, err = t.run(ctx, time.Minute, args...)
 	return err
 }

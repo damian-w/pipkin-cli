@@ -24,7 +24,7 @@ func claudeDecryptor(ctx context.Context, dir string) (func([]byte) ([]byte, err
 			return unprotectData(data)
 		}
 		if gcm == nil {
-			raw, err := readClaudeFile(filepath.Join(dir, "Local State"))
+			raw, err := readFileBounded(filepath.Join(dir, "Local State"), maxClaudeFileSize)
 			if err != nil {
 				return nil, errors.New("Claude Desktop encryption key was not found")
 			}

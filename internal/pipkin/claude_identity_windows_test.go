@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -133,10 +132,8 @@ func TestClaudeDesktopWindowsIdentityRevalidation(t *testing.T) {
 			if credential.source != "claude-desktop" || credential.desktopDir != dir || credential.identity != claudeOrgTestAccount+"|"+claudeOrgTestFirst {
 				t.Fatal("synthetic Desktop identity was not retained for revalidation")
 			}
-			original := usageHTTPClient
-			t.Cleanup(func() { usageHTTPClient = original })
 			calls := 0
-			usageHTTPClient = &http.Client{CheckRedirect: original.CheckRedirect, Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+			stubUsageHTTP(t, func(req *http.Request) *http.Response {
 				calls++
 				if req.URL.Scheme != "https" || req.URL.Host != "api.anthropic.com" || req.Method != http.MethodGet || req.Header.Get("Authorization") != "Bearer synthetic-only-token" {
 					t.Fatal("synthetic login was not confined to the mocked read-only endpoint")
@@ -154,8 +151,8 @@ func TestClaudeDesktopWindowsIdentityRevalidation(t *testing.T) {
 				} else if !strings.HasSuffix(req.URL.Path, "/usage") {
 					t.Fatalf("unexpected mocked endpoint %q", req.URL.Path)
 				}
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
-			})}
+				return testResponse(req, http.StatusOK, body)
+			})
 			reading, err := fetchClaudeCredentialUsage(context.Background(), credential, "synthetic-test-salt")
 			if calls != 2 {
 				t.Fatalf("expected mocked usage and identity verification requests, got %d", calls)
