@@ -13,6 +13,16 @@ import (
 	"time"
 )
 
+type claudeAccountProfile struct {
+	Account struct {
+		UUID string `json:"uuid"`
+	} `json:"account"`
+	Organization struct {
+		UUID string `json:"uuid"`
+		Type string `json:"organization_type"`
+	} `json:"organization"`
+}
+
 func fetchClaudeUsage(ctx context.Context, salt string) (*Reading, error) {
 	credential, err := loadClaudeCredential(ctx)
 	if err != nil {
@@ -33,31 +43,27 @@ func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential
 	reading.Source = credential.source
 	reading.Plan = credential.Plan
 	identity := credential.identity
-	profile, profileErr := requestClaudeUsage(ctx, credential.AccessToken, "profile")
-	verified := false
-	if profileErr == nil {
-		var account struct {
-			Account struct {
-				UUID string `json:"uuid"`
-			} `json:"account"`
-			Organization struct {
-				UUID string `json:"uuid"`
-				Type string `json:"organization_type"`
-			} `json:"organization"`
-		}
-		if json.Unmarshal(profile, &account) == nil && validClaudeUUID(account.Account.UUID) && validClaudeUUID(account.Organization.UUID) {
-			actual := strings.ToLower(account.Account.UUID + "|" + account.Organization.UUID)
-			if identity != "" && identity != actual {
-				return nil, fmt.Errorf("Claude Desktop login no longer matches its active account: %w", errSignedOut)
-			}
-			identity = actual
-			verified = true
-			if account.Organization.Type != "" {
-				reading.Plan = strings.TrimPrefix(account.Organization.Type, "claude_")
-			}
+	account := credential.profile
+	var profileErr error
+	if account == nil {
+		var profile []byte
+		profile, profileErr = requestClaudeUsage(ctx, credential.AccessToken, "profile")
+		var parsed claudeAccountProfile
+		if profileErr == nil && json.Unmarshal(profile, &parsed) == nil && validClaudeUUID(parsed.Account.UUID) && validClaudeUUID(parsed.Organization.UUID) {
+			account = &parsed
 		}
 	}
-	if credential.source == "claude-desktop" && !verified {
+	if account != nil {
+		actual := strings.ToLower(account.Account.UUID + "|" + account.Organization.UUID)
+		if identity != "" && identity != actual {
+			return nil, fmt.Errorf("Claude Desktop login no longer matches its active account: %w", errSignedOut)
+		}
+		identity = actual
+		if account.Organization.Type != "" {
+			reading.Plan = strings.TrimPrefix(account.Organization.Type, "claude_")
+		}
+	}
+	if credential.source == "claude-desktop" && account == nil {
 		if profileErr != nil {
 			return nil, profileErr
 		}

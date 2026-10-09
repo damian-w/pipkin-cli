@@ -30,6 +30,7 @@ type claudeCredential struct {
 	Scopes           []string `json:"scopes"`
 	source, identity string
 	desktopDir       string
+	profile          *claudeAccountProfile
 }
 
 type claudeDesktopConfig struct {
@@ -90,7 +91,25 @@ func readClaudeFile(path string) ([]byte, error) {
 }
 
 func loadClaudeCredential(ctx context.Context) (claudeCredential, error) {
+	return loadClaudeCredentialFor(ctx, runtime.GOOS, loadClaudeCodeCredential, loadClaudeDesktopCredential)
+}
+
+func loadClaudeCredentialFor(ctx context.Context, goos string,
+	loadCode func(context.Context) (claudeCredential, error),
+	loadDesktop func(context.Context, string, claudeDesktopConfig) (claudeCredential, error),
+) (claudeCredential, error) {
 	var zero claudeCredential
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	var code claudeCredential
+	var codeErr error
+	if goos == "darwin" {
+		code, codeErr = loadCode(ctx)
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+	}
 	// Desktop owns its rotating token. Borrow it read-only; never refresh or save it.
 	for _, dir := range claudeDesktopDirs() {
 		config, err := readClaudeDesktopConfig(dir)
@@ -103,8 +122,39 @@ func loadClaudeCredential(ctx context.Context) (claudeCredential, error) {
 		if !config.signedIn() {
 			continue
 		}
-		return loadClaudeDesktopCredential(ctx, dir, config)
+		var profileErr error
+		if goos == "darwin" && codeErr == nil {
+			// Desktop's account UUID is unencrypted. Verify Code belongs to it
+			// before avoiding the separate Safe Storage permission request.
+			profile, err := requestClaudeUsage(ctx, code.AccessToken, "profile")
+			profileErr = err
+			var account claudeAccountProfile
+			if err == nil && json.Unmarshal(profile, &account) == nil &&
+				validClaudeUUID(account.Account.UUID) && validClaudeUUID(account.Organization.UUID) &&
+				strings.EqualFold(config.AccountUUID, account.Account.UUID) {
+				code.identity = strings.ToLower(account.Account.UUID + "|" + account.Organization.UUID)
+				code.profile = &account
+				return code, nil
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		desktop, err := loadDesktop(ctx, dir, config)
+		var retry *usageRetryError
+		if err != nil && errors.As(profileErr, &retry) {
+			return zero, profileErr
+		}
+		return desktop, err
 	}
+	if goos == "darwin" {
+		return code, codeErr
+	}
+	return loadCode(ctx)
+}
+
+func loadClaudeCodeCredential(ctx context.Context) (claudeCredential, error) {
+	var zero claudeCredential
 	if runtime.GOOS == "darwin" {
 		service := "Claude Code-credentials"
 		if custom := os.Getenv("CLAUDE_CONFIG_DIR"); custom != "" {

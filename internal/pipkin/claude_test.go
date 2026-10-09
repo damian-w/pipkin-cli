@@ -205,7 +205,9 @@ func TestClaudeDesktopLive(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	credential, err := loadClaudeCredential(ctx)
+	credential, err := loadClaudeCredentialFor(ctx, runtime.GOOS,
+		func(context.Context) (claudeCredential, error) { return claudeCredential{}, errCredentialMissing },
+		loadClaudeDesktopCredential)
 	if err != nil {
 		t.Fatal(err)
 	}

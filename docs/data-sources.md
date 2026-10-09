@@ -9,12 +9,18 @@ started yet; they start with the first message and have no reset countdown.
 
 ## Existing sign-ins
 
-Claude prefers the account selected in Claude Desktop. Pipkin reads Desktop's
-saved access token and account/organization selection, including its selection
-cookie when available, and decrypts encrypted data in memory. An existing Claude
-Code sign-in can be used when Desktop has no saved sign-in. Codex uses its existing
+On Linux and Windows, Claude prefers the account selected in Claude Desktop.
+Pipkin reads Desktop's saved access token and account/organization selection,
+including its selection cookie when available, and decrypts encrypted data in
+memory. An existing Claude Code sign-in can be used when Desktop has no saved
+sign-in. Codex uses its existing
 local subscription sign-in from its configured auth file or OS credential store.
 API keys are not used for subscription readings.
+
+On macOS, Pipkin first tries an accessible Claude Code sign-in to avoid a separate
+Desktop Keychain permission request. When Desktop is signed in, Claude must verify
+that Code's login belongs to the same account. Readings then use Code's organization.
+If Code's login is unavailable or cannot be verified, Pipkin uses Desktop as before.
 
 On Windows, a running Claude Desktop can exclusively lock its cookie database.
 When its active-organization cookie is missing or inaccessible, Pipkin can infer

@@ -204,6 +204,6 @@ func authorizeCommand() error {
 	if err := authorizeClaudeKeychain(context.Background()); err != nil {
 		return err
 	}
-	fmt.Println("Claude Keychain access is ready. No Claude login was needed.")
+	fmt.Println("Claude's saved sign-in is ready. No Claude login was needed.")
 	return nil
 }
