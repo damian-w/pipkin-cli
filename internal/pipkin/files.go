@@ -1,7 +1,6 @@
 package pipkin
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -58,10 +57,9 @@ func writeJSON(path string, value any) error {
 }
 
 type Config struct {
-	Salt                     string          `json:"salt,omitempty"`
-	Port                     string          `json:"port,omitempty"`
-	LastPort                 string          `json:"last_port,omitempty"`
-	ClaudePreviousStatusLine json.RawMessage `json:"claude_previous_statusline,omitempty"`
+	Salt     string `json:"salt,omitempty"`
+	Port     string `json:"port,omitempty"`
+	LastPort string `json:"last_port,omitempty"`
 }
 
 // Preserve unknown fields and concurrent updates under a separate configuration lock.
@@ -78,7 +76,7 @@ func updateConfig(update func(*Config) error) (Config, error) {
 		return config, fmt.Errorf("could not lock Pipkin configuration: %w", err)
 	}
 	defer lock.Close()
-	path := filepath.Join(dir, "config.json")
+	path := configPath()
 	fields := make(map[string]json.RawMessage)
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -93,15 +91,12 @@ func updateConfig(update func(*Config) error) (Config, error) {
 		return config, fmt.Errorf("could not read Pipkin configuration: %w", err)
 	}
 	before := config
-	// A callback may edit the raw status line in place.
-	before.ClaudePreviousStatusLine = bytes.Clone(config.ClaudePreviousStatusLine)
 	if update != nil {
 		if err := update(&config); err != nil {
 			return before, err
 		}
 	}
-	if before.Salt == config.Salt && before.Port == config.Port && before.LastPort == config.LastPort &&
-		bytes.Equal(before.ClaudePreviousStatusLine, config.ClaudePreviousStatusLine) {
+	if before == config {
 		return config, nil
 	}
 	known, err := json.Marshal(config)
@@ -112,7 +107,7 @@ func updateConfig(update func(*Config) error) (Config, error) {
 	if err := json.Unmarshal(known, &updated); err != nil {
 		return before, err
 	}
-	for _, field := range []string{"salt", "port", "last_port", "claude_previous_statusline"} {
+	for _, field := range []string{"salt", "port", "last_port"} {
 		if value, ok := updated[field]; ok {
 			fields[field] = value
 		} else {
@@ -136,48 +131,6 @@ func initializedConfig() (Config, error) {
 		}
 		return nil
 	})
-}
-
-var errLockBusy = errors.New("another process holds the lock")
-
-// Closing the returned file releases the lock. Keep the lock file in place so
-// every process locks the same file even when protected files are replaced.
-func acquireFileLock(path string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	file, err := openLockFile(path)
-	if err != nil {
-		return nil, err
-	}
-	locked, err := tryFileLock(file)
-	if !locked {
-		file.Close()
-		if err == nil {
-			err = errLockBusy
-		}
-		return nil, err
-	}
-	return file, nil
-}
-
-func waitFileLock(ctx context.Context, path string) (*os.File, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		file, err := acquireFileLock(path)
-		if !errors.Is(err, errLockBusy) {
-			return file, err
-		}
-		timer := time.NewTimer(25 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
 }
 
 func logf(format string, args ...any) {

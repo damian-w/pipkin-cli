@@ -98,7 +98,7 @@ func readGenericPasswordMode(ctx context.Context, service, account string, allow
 	set("kSecClass", constant(a.security, "kSecClassGenericPassword"))
 	set("kSecMatchLimit", constant(a.security, "kSecMatchLimitOne"))
 	set("kSecReturnData", constant(a.foundation, "kCFBooleanTrue"))
-	// Fail instead of opening a Keychain permission or unlock dialog.
+	// Background reads fail instead of opening a Keychain permission or unlock dialog.
 	uiPolicy := "kSecUseAuthenticationUIFail"
 	if allowUI {
 		uiPolicy = "kSecUseAuthenticationUIAllow"
@@ -125,12 +125,12 @@ func readGenericPasswordMode(ctx context.Context, service, account string, allow
 	}
 	defer a.release(data)
 	length := a.dataLength(data)
-	if length <= 0 || length > 1<<20 {
-		return nil, errors.New("credential data is invalid")
+	if length <= 0 || length > maxCredentialSize {
+		return nil, errCredentialInvalid
 	}
 	pointer := a.dataBytes(data)
 	if pointer == nil {
-		return nil, errors.New("credential data is invalid")
+		return nil, errCredentialInvalid
 	}
 	return append([]byte(nil), unsafe.Slice(pointer, int(length))...), nil
 }

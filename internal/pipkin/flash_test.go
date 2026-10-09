@@ -115,7 +115,9 @@ func newFlashFixture(t *testing.T) *flashFixture {
 	f.actions = flashActions{
 		load:    func(context.Context, string) (*firmwareRelease, error) { return f.release, f.loadErr },
 		prepare: func(context.Context, io.Writer) (firmwareFlasher, error) { return f.tool, f.prepareErr },
-		ports:   func() []string { return []string{"TESTPORT"} },
+	}
+	f.actions.boardActions = boardActions{
+		ports: func() []string { return []string{"TESTPORT"} },
 		identity: func(context.Context, string, time.Duration) (map[string]string, error) {
 			f.identities++
 			if f.identities == 1 {
@@ -400,15 +402,15 @@ func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
 		t.Fatal(port, err)
 	}
 	var argsSeen []string
-	code, err := dispatch([]string{"flash", "--port", "COM4"}, "1.1.0", "", "", io.Discard,
-		cliHandlers{flash: func(args []string) error { argsSeen = args; return nil }})
+	code, err := dispatch([]string{"flash", "--port", "COM4"}, "1.1.0", testCommands(t, io.Discard,
+		map[string]func([]string) error{"flash": func(args []string) error { argsSeen = args; return nil }}), io.Discard)
 	if code != 0 || err != nil || len(argsSeen) != 2 {
 		t.Fatal("flash route failed", code, err, argsSeen)
 	}
 	for _, args := range [][]string{{"flash", "--help"}, {"help", "flash"}} {
 		calls := 0
 		var output bytes.Buffer
-		if code, err := dispatch(args, "1.1.0", "", "", &output, recordingHandlers(&calls)); code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "--reinstall") {
+		if code, err := dispatch(args, "1.1.0", recordingCommands(&output, &calls), &output); code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "--reinstall") {
 			t.Fatal("flash help has side effects", code, err)
 		}
 	}

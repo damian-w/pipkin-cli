@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -68,16 +69,22 @@ func snapshotAutostart() (func() error, error) {
 			return err
 		}
 		defer key.Close()
-		if kind == registry.EXPAND_SZ {
-			return key.SetExpandStringValue("Pipkin", value)
-		}
-		return key.SetStringValue("Pipkin", value)
+		return setRegistryString(key, "Pipkin", value, kind)
 	}, nil
 }
 
 func startService() error { return startDetachedHelper() }
 
 func stopService() error { return nil }
+
+func installLauncher() error { return updateUserPath(filepath.Dir(installedBinary()), false) }
+
+func removeLauncher() error { return updateUserPath(filepath.Dir(installedBinary()), true) }
+
+func launcherMissing() (bool, error) {
+	present, err := userPathContains(filepath.Dir(installedBinary()))
+	return !present, err
+}
 
 func userPathContains(folder string) (bool, error) {
 	key, err := registry.OpenKey(registry.CURRENT_USER, "Environment", registry.QUERY_VALUE)
@@ -95,12 +102,16 @@ func userPathContains(folder string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, part := range strings.Split(value, ";") {
-		if strings.EqualFold(filepath.Clean(part), filepath.Clean(folder)) {
-			return true, nil
-		}
+	return slices.ContainsFunc(strings.Split(value, ";"), func(part string) bool { return samePathEntry(part, folder) }), nil
+}
+
+func samePathEntry(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
+
+func setRegistryString(key registry.Key, name, value string, kind uint32) error {
+	if kind == registry.EXPAND_SZ {
+		return key.SetExpandStringValue(name, value)
 	}
-	return false, nil
+	return key.SetStringValue(name, value)
 }
 
 func updateUserPath(folder string, remove bool) error {
@@ -118,24 +129,19 @@ func updateUserPath(folder string, remove bool) error {
 	}
 	var parts []string
 	for _, part := range strings.Split(value, ";") {
-		if part != "" && !strings.EqualFold(filepath.Clean(part), filepath.Clean(folder)) {
+		if part != "" && !samePathEntry(part, folder) {
 			parts = append(parts, part)
 		}
 	}
 	if !remove {
 		parts = append(parts, folder)
 	}
-	joined := strings.Join(parts, ";")
-	if kind == registry.EXPAND_SZ {
-		err = key.SetExpandStringValue("Path", joined)
-	} else {
-		err = key.SetStringValue("Path", joined)
-	}
-	if err != nil {
+	if err := setRegistryString(key, "Path", strings.Join(parts, ";"), kind); err != nil {
 		return err
 	}
 	environment, _ := windows.UTF16PtrFromString("Environment")
-	result, _, err := windows.NewLazySystemDLL("user32.dll").NewProc("SendMessageTimeoutW").Call(
+	// Broadcast WM_SETTINGCHANGE with SMTO_ABORTIFHUNG so new terminals see PATH.
+	result, _, err := user32.NewProc("SendMessageTimeoutW").Call(
 		0xFFFF, 0x001A, 0, uintptr(unsafe.Pointer(environment)), 2, 5000, 0)
 	if result == 0 {
 		return fmt.Errorf("PATH was updated but notifying running programs failed: %w", err)

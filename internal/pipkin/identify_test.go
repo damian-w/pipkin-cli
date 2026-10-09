@@ -66,12 +66,12 @@ func newIdentifyFixture(t *testing.T) *identifyFixture {
 			t.Fatal("cleanup has no deadline")
 		}
 	}
-	f.actions = identifyActions{
-		prepare: func(_ context.Context, progress io.Writer) (boardInspector, error) {
-			f.events = append(f.events, "prepare")
-			io.WriteString(progress, "tool progress\n")
-			return f.tool, f.prepareErr
-		},
+	f.actions.prepare = func(_ context.Context, progress io.Writer) (boardInspector, error) {
+		f.events = append(f.events, "prepare")
+		io.WriteString(progress, "tool progress\n")
+		return f.tool, f.prepareErr
+	}
+	f.actions.boardActions = boardActions{
 		ports: func() []string { return []string{"TESTPORT"} },
 		identity: func(context.Context, string, time.Duration) (map[string]string, error) {
 			f.events = append(f.events, "identity")
@@ -92,14 +92,14 @@ func newIdentifyFixture(t *testing.T) *identifyFixture {
 			maintenance.Close()
 			return f.startErr
 		},
-		board: func(_ flashProbe, requested string) (identifyBoardInfo, error) {
-			f.events = append(f.events, "board")
-			return identifyBoardInfo{Profile: requested, Status: "unconfirmed", Candidates: []string{"test-cyd-profile"}}, f.boardErr
-		},
-		usb: func(string) identifyUSBInfo {
-			f.events = append(f.events, "usb")
-			return identifyUSBInfo{VendorID: "1a86", ProductID: "7523", Manufacturer: "USB vendor", Product: "USB Serial", SerialNumber: "private-usb-serial"}
-		},
+	}
+	f.actions.board = func(_ flashProbe, requested string) (identifyBoardInfo, error) {
+		f.events = append(f.events, "board")
+		return identifyBoardInfo{Profile: requested, Status: "unconfirmed", Candidates: []string{"test-cyd-profile"}}, f.boardErr
+	}
+	f.actions.usb = func(string) identifyUSBInfo {
+		f.events = append(f.events, "usb")
+		return identifyUSBInfo{VendorID: "1a86", ProductID: "7523", Manufacturer: "USB vendor", Product: "USB Serial", SerialNumber: "private-usb-serial"}
 	}
 	return f
 }
@@ -235,14 +235,6 @@ func TestIdentifyReportDoesNotCopyUnexpectedIdentityFields(t *testing.T) {
 	}
 }
 
-func TestIdentifyValidatesRequestedProfileBeforeHardware(t *testing.T) {
-	f := newIdentifyFixture(t)
-	f.actions.validateBoard = func(string) error { return errors.New("unknown profile") }
-	if err := f.run(context.Background(), identifyOptions{Board: "missing-profile"}); err == nil || len(f.events) != 0 {
-		t.Fatal("invalid profile touched hardware")
-	}
-}
-
 func TestIdentifyCatalogObservationsAreLabeledAndIncompleteFieldsOmitted(t *testing.T) {
 	board := identifyBoardInfo{
 		Profile: "known-profile", Name: "Known CYD", Status: "confirmed locally",
@@ -275,13 +267,13 @@ func TestIdentifyCatalogObservationsAreLabeledAndIncompleteFieldsOmitted(t *test
 }
 
 func TestIdentifyOptions(t *testing.T) {
-	for _, args := range [][]string{{"--json", "--issue"}, {"--port="}, {"--board="}, {"--board", "MixedCase"}, {"--board", "../board"}, {"--port", "\x1b[31m"}, {"--port", " space"}, {"--unknown"}, {"extra"}} {
+	for _, args := range [][]string{{"--json", "--issue"}, {"--port="}, {"--board="}, {"--board", "MixedCase"}, {"--board", "../board"}, {"--board", "missing-profile"}, {"--port", "\x1b[31m"}, {"--port", " space"}, {"--unknown"}, {"extra"}} {
 		if _, err := parseIdentifyOptions(args); err == nil {
 			t.Fatalf("accepted %v", args)
 		}
 	}
-	options, err := parseIdentifyOptions([]string{"--port", "TESTPORT", "--json", "--board", "test-cyd-profile"})
-	if err != nil || options.Port != "TESTPORT" || !options.JSON || options.Board != "test-cyd-profile" {
+	options, err := parseIdentifyOptions([]string{"--port", "TESTPORT", "--json", "--board", "esp32-2432s028r-dual-usb"})
+	if err != nil || options.Port != "TESTPORT" || !options.JSON || options.Board != "esp32-2432s028r-dual-usb" {
 		t.Fatalf("options=%+v error=%v", options, err)
 	}
 }

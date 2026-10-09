@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 )
 
 // This copy is shipped with the CLI; the firmware repository owns the catalog.
@@ -32,7 +33,6 @@ type boardVariant struct {
 type boardProfile struct {
 	ID        string   `json:"id"`
 	Aliases   []string `json:"aliases"`
-	Name      string   `json:"name"`
 	Hardware  string   `json:"hardware"`
 	Chip      string   `json:"chip"`
 	FlashSize int64    `json:"flash_size"`
@@ -48,7 +48,8 @@ type boardProfile struct {
 	Variants []boardVariant `json:"variants"`
 }
 
-func boardProfiles() ([]boardProfile, error) {
+// boardProfiles parses the embedded catalog once. Callers must not modify it.
+var boardProfiles = sync.OnceValues(func() ([]boardProfile, error) {
 	var catalog struct {
 		SchemaVersion int            `json:"schema_version"`
 		Profiles      []boardProfile `json:"profiles"`
@@ -72,7 +73,7 @@ func boardProfiles() ([]boardProfile, error) {
 		}
 	}
 	return catalog.Profiles, nil
-}
+})
 
 func variantIDs(variants []boardVariant) []string {
 	ids := make([]string, 0, len(variants))
@@ -91,10 +92,8 @@ func firmwareBoardProfile(id string) (boardProfile, bool) {
 		if p.ID == id {
 			return p, true
 		}
-		for _, alias := range p.Aliases {
-			if alias == id {
-				return p, true
-			}
+		if slices.Contains(p.Aliases, id) {
+			return p, true
 		}
 	}
 	return boardProfile{}, false
@@ -142,20 +141,15 @@ func rememberedBoardsPath() string { return filepath.Join(appDir(), "boards.json
 
 func loadRememberedBoards() (rememberedBoards, error) {
 	boards := rememberedBoards{SchemaVersion: 1}
-	file, err := os.Open(rememberedBoardsPath())
+	data, err := readFileBounded(rememberedBoardsPath(), 64<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		return boards, nil
 	}
-	if err != nil {
-		return boards, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
-	if err != nil {
-		return boards, err
-	}
-	if len(data) > 64*1024 {
+	if errors.Is(err, errReadTooLarge) {
 		return boards, errors.New("saved board associations exceed size limit")
+	}
+	if err != nil {
+		return boards, err
 	}
 	if err := json.Unmarshal(data, &boards); err != nil {
 		return boards, fmt.Errorf("could not read saved board associations: %w", err)
@@ -202,15 +196,14 @@ func inspectBoard(probe flashProbe, requested string) (identifyBoardInfo, error)
 	if err != nil {
 		return info, err
 	}
+	saved := slices.IndexFunc(boards.Devices, func(b rememberedBoard) bool { return b.MAC == probe.MAC })
 	if requested == "" {
-		for _, b := range boards.Devices {
-			if b.MAC == probe.MAC {
-				if b != boardFingerprint(probe, b.Profile) {
-					return info, errors.New("saved board electronics no longer match; inspect the PCB and confirm again with pipkin identify --board PROFILE")
-				}
-				requested = b.Profile
-				break
+		if saved >= 0 {
+			b := boards.Devices[saved]
+			if b != boardFingerprint(probe, b.Profile) {
+				return info, errors.New("saved board electronics no longer match; inspect the PCB and confirm again with pipkin identify --board PROFILE")
 			}
+			requested = b.Profile
 		}
 		if requested == "" {
 			return info, nil
@@ -234,22 +227,12 @@ func inspectBoard(probe flashProbe, requested string) (identifyBoardInfo, error)
 	if probe.Secure {
 		return info, errors.New("secure boot or flash encryption is enabled; this board cannot use the standard profile")
 	}
-	record := boardFingerprint(probe, requested)
-	found := false
-	for i, b := range boards.Devices {
-		if b.MAC == probe.MAC {
-			boards.Devices[i] = record
-			found = true
-		}
-	}
-	if !found {
+	if record := boardFingerprint(probe, requested); saved >= 0 {
+		boards.Devices[saved] = record
+	} else {
 		boards.Devices = append(boards.Devices, record)
 	}
-	data, err := json.MarshalIndent(boards, "", "  ")
-	if err != nil {
-		return info, err
-	}
-	if err := writeFileAtomic(rememberedBoardsPath(), append(data, '\n'), 0600); err != nil {
+	if err := writeJSON(rememberedBoardsPath(), boards); err != nil {
 		return info, fmt.Errorf("could not remember board profile: %w", err)
 	}
 	return catalogBoardInfo(p, v, "confirmed locally"), nil
@@ -262,9 +245,4 @@ func sameFirmwareBoard(a, b string) bool {
 	}
 	right, ok := firmwareBoardProfile(b)
 	return ok && left.ID == right.ID
-}
-
-func profileCompatibleWithManifest(profile string, manifest firmwareManifest) bool {
-	p, _, err := physicalBoardProfile(profile)
-	return err == nil && sameFirmwareBoard(p.ID, manifest.Board) && p.Chip == manifest.Chip && p.FlashSize == manifest.FlashSize && p.FlashMode == manifest.FlashMode && p.FlashFreq == manifest.FlashFreq && p.Layout == manifest.Layout
 }

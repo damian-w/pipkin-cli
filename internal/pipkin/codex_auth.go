@@ -45,7 +45,7 @@ func loadCodexAuth(ctx context.Context) (codexAuth, error) {
 				return codexAuth{}, fmt.Errorf("Codex keyring sign-in is absent: %w", errSignedOut)
 			}
 		}
-		data, err := readCodexAuthFile(filepath.Join(home, "auth.json"))
+		data, err := readFileBounded(filepath.Join(home, "auth.json"), maxCredentialSize)
 		if err == nil {
 			auth, err := parseCodexAuth(data)
 			auth.Source = "codex_auth_file"
@@ -95,10 +95,6 @@ func codexStoreKey(home string) string {
 	}
 	sum := sha256.Sum256([]byte(home))
 	return "cli|" + hex.EncodeToString(sum[:8])
-}
-
-func readCodexAuthFile(path string) ([]byte, error) {
-	return readCredentialFile(path, 1<<20, "Codex credential file could not be read")
 }
 
 func parseCodexAuth(data []byte) (codexAuth, error) {
@@ -151,7 +147,7 @@ func parseCodexAuth(data []byte) (codexAuth, error) {
 }
 
 func codexAuthStoreMode(home string) (string, error) {
-	data, err := readCodexAuthFile(filepath.Join(home, "config.toml"))
+	data, err := readFileBounded(filepath.Join(home, "config.toml"), maxCredentialSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return "file", nil
 	}

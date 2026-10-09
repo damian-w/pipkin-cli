@@ -31,6 +31,40 @@ func writeTestBinary(t *testing.T, path, text string) {
 	}
 }
 
+// stageTestInstall writes source and installed binaries by name, then stages the
+// source console executable for goos into the installed directory.
+func stageTestInstall(t *testing.T, goos string, sources, installed map[string]string) (*stagedBinaries, string) {
+	t.Helper()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "installed")
+	for name, text := range sources {
+		writeTestBinary(t, filepath.Join(dir, "source", name), text)
+	}
+	for name, text := range installed {
+		writeTestBinary(t, filepath.Join(target, name), text)
+	}
+	console := "pipkin"
+	if goos == "windows" {
+		console += ".exe"
+	}
+	staged, err := stageLocalBinaries(filepath.Join(dir, "source", console), target, goos, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(staged.close)
+	return staged, target
+}
+
+// testService reports which Windows executable startup would select.
+func testService(target string) func() string {
+	return func() string {
+		if _, err := os.Stat(filepath.Join(target, "pipkinw.exe")); err == nil {
+			return "companion"
+		}
+		return "console"
+	}
+}
+
 func checkTestBinary(t *testing.T, path, text string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -133,17 +167,8 @@ func TestReleasePreparationVerifiesWholeSet(t *testing.T) {
 }
 
 func TestSourceInstallDropsStaleWindowsCompanion(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin.exe")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	writeTestBinary(t, filepath.Join(target, "pipkin.exe"), "old console")
-	writeTestBinary(t, filepath.Join(target, "pipkinw.exe"), "old companion")
-	staged, err := stageLocalBinaries(source, target, "windows", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "windows", map[string]string{"pipkin.exe": "new console"},
+		map[string]string{"pipkin.exe": "old console", "pipkinw.exe": "old companion"})
 	if !staged.missingCompanion {
 		t.Fatal("did not report an absent source companion")
 	}
@@ -163,18 +188,8 @@ func TestSourceInstallDropsStaleWindowsCompanion(t *testing.T) {
 }
 
 func TestReplacementFailureRestoresEntireBinarySet(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin.exe")
-	target := filepath.Join(dir, "installed")
-	for _, name := range []string{"pipkin.exe", "pipkinw.exe"} {
-		writeTestBinary(t, filepath.Join(filepath.Dir(source), name), "new "+name)
-		writeTestBinary(t, filepath.Join(target, name), "old "+name)
-	}
-	staged, err := stageLocalBinaries(source, target, "windows", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "windows", map[string]string{"pipkin.exe": "new pipkin.exe", "pipkinw.exe": "new pipkinw.exe"},
+		map[string]string{"pipkin.exe": "old pipkin.exe", "pipkinw.exe": "old pipkinw.exe"})
 	// The first rename succeeds; the second fails after its old executable was backed up.
 	if err := os.Remove(staged.artifacts[1].staged); err != nil {
 		t.Fatal(err)
@@ -190,24 +205,10 @@ func TestReplacementFailureRestoresEntireBinarySet(t *testing.T) {
 func TestActivationFailureRestoresServiceAndRunningHelper(t *testing.T) {
 	for _, failure := range []string{"registration", "configuration", "startup"} {
 		t.Run(failure, func(t *testing.T) {
-			dir := t.TempDir()
-			source := filepath.Join(dir, "source", "pipkin.exe")
-			target := filepath.Join(dir, "installed")
-			writeTestBinary(t, source, "new console")
-			writeTestBinary(t, filepath.Join(target, "pipkin.exe"), "old console")
-			writeTestBinary(t, filepath.Join(target, "pipkinw.exe"), "old companion")
-			staged, err := stageLocalBinaries(source, target, "windows", "amd64")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer staged.close()
+			staged, target := stageTestInstall(t, "windows", map[string]string{"pipkin.exe": "new console"},
+				map[string]string{"pipkin.exe": "old console", "pipkinw.exe": "old companion"})
 			var events []string
-			service := func() string {
-				if _, err := os.Stat(filepath.Join(target, "pipkinw.exe")); err == nil {
-					return "companion"
-				}
-				return "console"
-			}
+			service := testService(target)
 			actions := installationActions{
 				running: func() (int, error) { return 123, nil },
 				snapshot: func() (func() error, error) {
@@ -251,15 +252,7 @@ func TestActivationFailureRestoresServiceAndRunningHelper(t *testing.T) {
 }
 
 func TestFailedFreshInstallRemovesAutostart(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	staged, err := stageLocalBinaries(source, target, "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, nil)
 	unregistered := false
 	actions := installationActions{
 		running: func() (int, error) { return 0, nil },
@@ -369,16 +362,7 @@ func TestFreshLauncherIsRemovedOnStartupFailure(t *testing.T) {
 }
 
 func TestStoppedReplacementFailurePreservesBackup(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	writeTestBinary(t, filepath.Join(target, "pipkin"), "old console")
-	staged, err := stageLocalBinaries(source, target, "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, map[string]string{"pipkin": "old console"})
 	stops := 0
 	actions := installationActions{
 		running:  func() (int, error) { return 123, nil },
@@ -401,16 +385,7 @@ func TestStoppedReplacementFailurePreservesBackup(t *testing.T) {
 }
 
 func TestUpgradePreservesOnlyRecoveryCopy(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	writeTestBinary(t, filepath.Join(target, "pipkin.old"), "only working executable")
-	staged, err := stageLocalBinaries(source, target, "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, map[string]string{"pipkin.old": "only working executable"})
 	stopped := false
 	actions := installationActions{stop: func() error { stopped = true; return nil }}
 	if _, err := activateBinaries(staged, actions); err == nil || !strings.Contains(err.Error(), "recovery backup") {
@@ -445,24 +420,10 @@ func TestIncompleteManifestAvoidsBinaryDownloads(t *testing.T) {
 }
 
 func TestUpdateRefreshesNewWindowlessService(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin.exe")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	writeTestBinary(t, filepath.Join(filepath.Dir(source), "pipkinw.exe"), "new companion")
-	writeTestBinary(t, filepath.Join(target, "pipkin.exe"), "old console")
-	staged, err := stageLocalBinaries(source, target, "windows", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "windows", map[string]string{"pipkin.exe": "new console", "pipkinw.exe": "new companion"},
+		map[string]string{"pipkin.exe": "old console"})
 	registered, started := false, false
-	service := func() string {
-		if _, err := os.Stat(filepath.Join(target, "pipkinw.exe")); err == nil {
-			return "companion"
-		}
-		return "console"
-	}
+	service := testService(target)
 	actions := installationActions{
 		running:  func() (int, error) { return 123, nil },
 		snapshot: noAutostartSnapshot,
@@ -496,16 +457,7 @@ func TestUpdateRefreshesNewWindowlessService(t *testing.T) {
 }
 
 func TestRollbackPreservesAbsentAutostartWithInstalledBinary(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	writeTestBinary(t, filepath.Join(target, "pipkin"), "old console")
-	staged, err := stageLocalBinaries(source, target, "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, map[string]string{"pipkin": "old console"})
 	registration := ""
 	restarted := false
 	actions := installationActions{
@@ -546,16 +498,7 @@ func TestRollbackPreservesAbsentAutostartWithInstalledBinary(t *testing.T) {
 }
 
 func TestAutostartSnapshotFailureLeavesHelperRunning(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source", "pipkin")
-	target := filepath.Join(dir, "installed")
-	writeTestBinary(t, source, "new console")
-	writeTestBinary(t, filepath.Join(target, "pipkin"), "old console")
-	staged, err := stageLocalBinaries(source, target, "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
+	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, map[string]string{"pipkin": "old console"})
 	stopped := false
 	actions := installationActions{
 		running:  func() (int, error) { return 123, nil },

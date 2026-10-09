@@ -17,39 +17,7 @@ import (
 
 var repository = envOr("PIPKIN_REPOSITORY", "damian-w/pipkin-cli")
 
-func installLauncher() error {
-	if runtime.GOOS == "windows" {
-		return updateUserPath(filepath.Dir(installedBinary()), false)
-	}
-	if err := os.MkdirAll(filepath.Dir(launcherPath()), 0o755); err != nil {
-		return err
-	}
-	if target, err := os.Readlink(launcherPath()); err == nil && target == installedBinary() {
-		return nil
-	}
-	return os.Symlink(installedBinary(), launcherPath())
-}
-
-func launcherMissing() (bool, error) {
-	if runtime.GOOS == "windows" {
-		present, err := userPathContains(filepath.Dir(installedBinary()))
-		return !present, err
-	}
-	if _, err := os.Lstat(launcherPath()); errors.Is(err, os.ErrNotExist) {
-		return true, nil
-	} else if err != nil {
-		return false, err
-	}
-	if target, err := os.Readlink(launcherPath()); err == nil && target == installedBinary() {
-		return false, nil
-	}
-	return false, errors.New("an unrelated pipkin command already exists; left unchanged")
-}
-
-func installCommand(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("install takes no options; existing Codex and Claude sessions are detected automatically")
-	}
+func installCommand() error {
 	source, err := os.Executable()
 	if err != nil {
 		return err
@@ -77,27 +45,15 @@ func installCommand(args []string) error {
 	launcherCreated := false
 	actions := helperInstallationActions()
 	actions.configure = func() error {
-		if _, err := updateConfig(removeLegacyClaudeHook); err != nil {
-			return err
-		}
 		// PATH may be written even if notifying Windows fails; roll it back too.
 		launcherCreated = needsLauncher
-		if err := installLauncher(); err != nil {
-			return err
-		}
-		return nil
+		return installLauncher()
 	}
 	actions.undoConfigure = func() error {
 		if !launcherCreated {
 			return nil
 		}
-		if runtime.GOOS == "windows" {
-			return updateUserPath(filepath.Dir(installedBinary()), true)
-		}
-		if target, err := os.Readlink(launcherPath()); err == nil && target == installedBinary() {
-			return os.Remove(launcherPath())
-		}
-		return nil
+		return removeLauncher()
 	}
 	mechanism, err := activateBinaries(staged, actions)
 	if err != nil {
@@ -162,7 +118,10 @@ func terminalText(value string) string {
 	}, value)
 }
 
-func statusCommand() error {
+func statusCommand(args []string) error {
+	if len(args) == 1 {
+		return statusJSONCommand()
+	}
 	_, err := os.Stat(installedBinary())
 	installed := err == nil
 	pid, err := runningPID()
@@ -363,12 +322,7 @@ func updateCommand() error {
 	if _, err := initializedConfig(); err != nil {
 		return err
 	}
-	actions := helperInstallationActions()
-	actions.configure = func() error {
-		_, err := updateConfig(removeLegacyClaudeHook)
-		return err
-	}
-	if _, err := activateBinaries(staged, actions); err != nil {
+	if _, err := activateBinaries(staged, helperInstallationActions()); err != nil {
 		return fmt.Errorf("update failed: %w", err)
 	}
 	fmt.Printf("Updated Pipkin helper %s -> %s.\n", version, strings.TrimPrefix(tag, "v"))
@@ -387,14 +341,8 @@ func uninstallCommand() error {
 	if err := removeAutostart(); err != nil {
 		return err
 	}
-	if runtime.GOOS == "windows" {
-		if err := updateUserPath(filepath.Dir(installedBinary()), true); err != nil {
-			return err
-		}
-	} else if target, err := os.Readlink(launcherPath()); err == nil && target == installedBinary() {
-		if err := os.Remove(launcherPath()); err != nil {
-			return err
-		}
+	if err := removeLauncher(); err != nil {
+		return err
 	}
 	if err := removeInstallation(); err != nil {
 		return err

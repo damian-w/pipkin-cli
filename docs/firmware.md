@@ -43,7 +43,7 @@ The CLI obtains the stable release's flash manifest, downloads the required imag
 and verifies their checksums. It checks the serial connection, current firmware
 when available, and the board's ESP chip and flash. These checks may briefly restart
 the display. It then shows the board, current firmware, target version and whether
-the action is an installation or update, and asks for yes/no confirmation.
+the action (install, update, reinstall or downgrade), and asks for yes/no confirmation.
 
 Only `y` or `yes` confirms. Enter, no, end of input or cancellation does not write
 firmware. Confirmation requires an interactive terminal; there is no `--yes`
@@ -109,8 +109,8 @@ command before writing; reinstalling does not bypass those checks.
 
 The CLI automatically downloads and privately caches Espressif's official
 **esptool v5.4.0** executable and verifies the download. You do not need to install
-Python or ESP-IDF. The tool is used only when you run `pipkin flash`; it does not run
-as part of the background helper. GitHub requests contain no usage readings or
+Python or ESP-IDF. The tool is used only when you run `pipkin flash` or
+`pipkin identify`; it does not run as part of the background helper. GitHub requests contain no usage readings or
 provider credentials, and Pipkin has no telemetry.
 
 See [flashing-tool provenance and licences](esptool.md) for the pinned downloads,

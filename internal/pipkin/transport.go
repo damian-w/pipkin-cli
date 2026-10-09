@@ -28,6 +28,8 @@ type connection struct {
 
 const maxPacketBytes = 768
 
+const identifyPacket = "v=1 kind=identify\n"
+
 func (c *connection) lines() ([]string, error) {
 	data, err := c.port.ReadAvailable()
 	if err != nil {
@@ -135,17 +137,17 @@ func isIdentity(fields map[string]string) bool {
 	return true
 }
 
+// decimalUint accepts only plain decimal digits; ParseUint rejects signs and separators.
 func decimalUint(value string) (uint64, bool) {
-	if value == "" {
-		return 0, false
-	}
-	for _, c := range value {
-		if c < '0' || c > '9' {
-			return 0, false
-		}
-	}
 	n, err := strconv.ParseUint(value, 10, 64)
 	return n, err == nil
+}
+
+// identityClock returns the sequence and clock epoch of a validated identity.
+func identityClock(fields map[string]string) (seq, epoch uint64) {
+	seq, _ = decimalUint(fields["seq"])
+	epoch, _ = decimalUint(fields["clock_epoch"])
+	return seq, epoch
 }
 
 // Retry to cover boards that restart when the serial port opens.
@@ -157,7 +159,7 @@ func identify(parent context.Context, c *connection, timeout time.Duration) map[
 	var next time.Time
 	for ctx.Err() == nil {
 		if time.Now().After(next) {
-			if c.port.Write(ctx, []byte("v=1 kind=identify\n")) != nil {
+			if c.port.Write(ctx, []byte(identifyPacket)) != nil {
 				return nil
 			}
 			next = time.Now().Add(time.Second)

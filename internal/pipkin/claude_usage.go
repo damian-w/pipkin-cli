@@ -2,8 +2,6 @@ package pipkin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +21,23 @@ type claudeAccountProfile struct {
 	} `json:"organization"`
 }
 
+func (p *claudeAccountProfile) identity() string {
+	return strings.ToLower(p.Account.UUID + "|" + p.Organization.UUID)
+}
+
+// fetchClaudeProfile returns the token's account, or nil when the profile is invalid.
+func fetchClaudeProfile(ctx context.Context, token string) (*claudeAccountProfile, error) {
+	raw, err := requestClaudeOAuth(ctx, token, "profile")
+	if err != nil {
+		return nil, err
+	}
+	var profile claudeAccountProfile
+	if json.Unmarshal(raw, &profile) != nil || !validClaudeUUID(profile.Account.UUID) || !validClaudeUUID(profile.Organization.UUID) {
+		return nil, nil
+	}
+	return &profile, nil
+}
+
 func fetchClaudeUsage(ctx context.Context, salt string) (*Reading, error) {
 	credential, err := loadClaudeCredential(ctx)
 	if err != nil {
@@ -32,7 +47,7 @@ func fetchClaudeUsage(ctx context.Context, salt string) (*Reading, error) {
 }
 
 func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential, salt string) (*Reading, error) {
-	raw, err := requestClaudeUsage(ctx, credential.AccessToken, "usage?cedar_ember=1")
+	raw, err := requestClaudeOAuth(ctx, credential.AccessToken, "usage?cedar_ember=1")
 	if err != nil {
 		return nil, err
 	}
@@ -46,15 +61,10 @@ func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential
 	account := credential.profile
 	var profileErr error
 	if account == nil {
-		var profile []byte
-		profile, profileErr = requestClaudeUsage(ctx, credential.AccessToken, "profile")
-		var parsed claudeAccountProfile
-		if profileErr == nil && json.Unmarshal(profile, &parsed) == nil && validClaudeUUID(parsed.Account.UUID) && validClaudeUUID(parsed.Organization.UUID) {
-			account = &parsed
-		}
+		account, profileErr = fetchClaudeProfile(ctx, credential.AccessToken)
 	}
 	if account != nil {
-		actual := strings.ToLower(account.Account.UUID + "|" + account.Organization.UUID)
+		actual := account.identity()
 		if identity != "" && identity != actual {
 			return nil, fmt.Errorf("Claude Desktop login no longer matches its active account: %w", errSignedOut)
 		}
@@ -63,13 +73,13 @@ func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential
 			reading.Plan = strings.TrimPrefix(account.Organization.Type, "claude_")
 		}
 	}
-	if credential.source == "claude-desktop" && account == nil {
+	if credential.source == claudeDesktopSource && account == nil {
 		if profileErr != nil {
 			return nil, profileErr
 		}
 		return nil, errors.New("Claude Desktop account identity could not be verified")
 	}
-	if credential.source == "claude-desktop" && credential.desktopDir != "" {
+	if credential.desktopDir != "" {
 		if err := validateClaudeDesktopIdentity(ctx, credential); err != nil {
 			return nil, err
 		}
@@ -77,40 +87,23 @@ func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential
 	if identity == "" {
 		identity = credential.AccessToken
 	}
-	digest := sha256.Sum256([]byte(salt + identity))
-	reading.Account = "a" + hex.EncodeToString(digest[:])[:16]
+	reading.Account = accountDigest("a", salt, identity)
 	return reading, nil
 }
 
-func requestClaudeUsage(ctx context.Context, token, endpoint string) ([]byte, error) {
+func requestClaudeOAuth(ctx context.Context, token, endpoint string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.anthropic.com/api/oauth/"+endpoint, nil)
 	if err != nil {
 		return nil, errors.New("Claude usage request could not be created")
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	// This surface header also makes the usage endpoint report reset grants.
 	req.Header.Set("User-Agent", "claude-cli/2.1.280 (external, cli)")
-	response, err := usageHTTPClient.Do(req)
-	if err != nil {
-		return nil, offlineError{"Claude usage request failed"}
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("Claude sign-in expired; open Claude to renew it: %w", errSignedOut)
-	}
-	if response.StatusCode == http.StatusForbidden {
-		return nil, errors.New("Claude sign-in cannot read subscription usage")
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, usageResponseError("Claude", response)
-	}
-	raw, err := readBounded(response.Body, 1<<20)
-	if err != nil {
-		return nil, errors.New("Claude usage response is unreadable or too large")
-	}
-	return raw, nil
+	return requestUsage(req, "Claude", map[int]error{
+		http.StatusUnauthorized: fmt.Errorf("Claude sign-in expired; open Claude to renew it: %w", errSignedOut),
+		http.StatusForbidden:    errors.New("Claude sign-in cannot read subscription usage"),
+	})
 }
 
 type claudeUsageWindow struct {

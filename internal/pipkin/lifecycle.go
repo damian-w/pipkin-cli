@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 )
 
@@ -78,11 +77,7 @@ func readPIDRecord() (pidRecord, error) {
 		return record, fmt.Errorf("could not read the helper process identity: %w", err)
 	}
 	if err := json.Unmarshal(data, &record); err != nil {
-		// Legacy PID-only records still require executable verification before signaling.
-		record.PID, err = strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil {
-			return record, errors.New("invalid helper process identity; refusing to signal a process")
-		}
+		return record, errors.New("invalid helper process identity; refusing to signal a process")
 	}
 	if record.PID <= 0 {
 		return record, errors.New("invalid helper PID; refusing to signal a process")
@@ -95,28 +90,10 @@ func validatePID(record pidRecord) error {
 	if err != nil {
 		return fmt.Errorf("could not verify helper PID %d: %w", record.PID, err)
 	}
-	if record.Started == "" && record.Executable == "" {
-		if sameExecutablePath(actual.Executable, installedBinary()) || sameExecutablePath(actual.Executable, serviceBinary()) {
-			return nil
-		}
-	} else if record.Started != "" && actual.Started == record.Started && sameExecutablePath(actual.Executable, record.Executable) {
+	if record.Started != "" && actual.Started == record.Started && sameExecutablePath(actual.Executable, record.Executable) {
 		return nil
 	}
 	return fmt.Errorf("PID %d does not match the helper process identity; refusing to signal it", record.PID)
-}
-
-func terminateHelper(pid int) error {
-	record, err := readPIDRecord()
-	if err != nil {
-		return err
-	}
-	if record.PID != pid {
-		return errors.New("helper process changed while stopping; retry the command")
-	}
-	if err := validatePID(record); err != nil {
-		return err
-	}
-	return terminateProcess(pid)
 }
 
 func sameExecutablePath(a, b string) bool {

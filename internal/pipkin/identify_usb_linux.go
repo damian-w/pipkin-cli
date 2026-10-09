@@ -2,7 +2,6 @@ package pipkin
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,12 +39,7 @@ func identifyUSBFromSysfs(tty, root string) identifyUSBInfo {
 }
 
 func identifyUSBAttribute(node, name string) string {
-	file, err := os.Open(filepath.Join(node, name))
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	data, err := readBounded(file, 4096)
+	data, err := readFileBounded(filepath.Join(node, name), 4096)
 	if err != nil {
 		return ""
 	}

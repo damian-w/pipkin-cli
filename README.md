@@ -7,78 +7,109 @@
   <img src="docs/images/badge-works-with-claude-code.svg" alt="Works with Claude Code" height="28">
 </p>
 
-Show your remaining Codex and Claude subscription usage on a Pipkin USB display.
-Pipkin uses your existing desktop app sign-ins. No provider CLI, new login, or
-other type of authentication is needed.
+Pipkin is a small USB display for your desk. It shows how much of your Claude and
+Codex allowance you have left, and when it resets, so you don't have to dig
+through settings in the middle of your work.
+
+This repository holds the helper that runs on your computer and keeps the display
+up to date. If you're signed in to Claude or Codex in their desktop apps, you're
+already set up. Pipkin uses those existing sign-ins, so there's nothing new to log
+into and no API key to find.
+
+## What you need
+
+- A Pipkin display, either a kit or one you've built from a CYD board.
+- A USB **data** cable. Some cables only carry power and won't work.
+- A Mac, Windows PC or Linux computer.
+- The Claude desktop app, the Codex app, or both, signed in.
 
 ## Install
 
-Supports macOS, Linux, and Windows on ARM64 and Intel/AMD 64-bit.
+You'll paste one line into a terminal window. After that, Pipkin looks after
+itself.
 
-macOS / Linux:
+**Mac:** open **Terminal** (press ⌘ Space, type *Terminal*, then press Return),
+paste this line and press Return:
 
 ```sh
 curl -fsSL https://pipkin.io/install.sh | sh
 ```
 
-Windows PowerShell:
+**Windows:** open **PowerShell** from the Start menu, paste this line and press
+Enter:
 
 ```powershell
 irm https://pipkin.io/install.ps1 | iex
 ```
 
-Pipkin runs in the background and starts automatically at sign-in. Connect your
-display with a USB data cable. On Windows, open a new terminal after installing;
-on macOS and Linux, add `~/.local/bin` to your PATH if needed.
+**Linux:** run the Mac command in your terminal.
 
-The display sleeps and wakes with your computer and reconnects automatically.
-On macOS and Windows, it also follows screen sleep.
+Then plug in your display. Your numbers appear shortly, and Pipkin starts by
+itself each time you sign in to your computer.
 
-On macOS, choose **Always Allow** if Keychain asks for access to Claude's saved
-sign-in. See the [sign-in guide](docs/data-sources.md#existing-sign-ins) if you need
-help with permissions.
+On a Mac, you may see a Keychain prompt asking about Claude's saved sign-in.
+Choose **Always Allow** so Pipkin can keep reading it in the background. If you
+clicked something else, the [sign-in guide](docs/data-sources.md#existing-sign-ins)
+explains how to fix it.
 
-## Use
+## What the display shows
 
-```sh
-pipkin usage         # Read usage now
-pipkin usage --json  # All metrics for integrations
-pipkin status        # Check the helper and USB display
-pipkin restart       # Restart the background helper
-pipkin update        # Update the CLI
-pipkin flash         # Install or update display firmware
-pipkin uninstall     # Remove Pipkin
-```
+For each app, Pipkin shows how much of your current session and your weekly
+allowance is left, and when each one resets.
 
-Claude readings include session, weekly, model-specific limits, extra usage, and
-reset times. Codex includes session, weekly, credits, and reset times. Both include
-banked resets when reported.
+The display goes to sleep with your computer and wakes up with it. On Mac and
+Windows, it also switches off when your screens do. If you unplug it, it
+reconnects on its own when you plug it back in.
 
-All metrics are available in JSON. Current display firmware shows session, weekly,
-and reset information. See the [JSON output reference](docs/output.md) for the full
-metric set and the separate [display protocol](docs/protocol.md).
+If a sign-in expires, open that app and sign in again. Pipkin picks it up
+automatically.
 
-Credentials stay local except for direct requests to their provider. No telemetry.
-If a sign-in expires, open the provider's app. See
-[data sources and limitations](docs/data-sources.md).
+## Handy commands
 
-## Display firmware
+You won't need these day to day, but they're there if something looks off. Type
+them into a terminal window. On Windows, open a new PowerShell window after
+installing so it can find `pipkin`.
 
-To set up a self-built display or update your Pipkin, connect it by USB and run:
+| Command | What it does |
+| --- | --- |
+| `pipkin status` | Checks that the helper is running and the display is connected |
+| `pipkin usage` | Shows your current usage in the terminal |
+| `pipkin restart` | Restarts the helper |
+| `pipkin update` | Updates Pipkin to the latest version |
+| `pipkin flash` | Installs or updates the display's firmware |
+| `pipkin uninstall` | Removes Pipkin from your computer |
+
+On a Mac or Linux, if the terminal says `pipkin: command not found`, use
+`~/.local/bin/pipkin` instead, or add `~/.local/bin` to your PATH.
+
+## Updating your display
+
+The display's firmware gets improvements too. With the display plugged in, run:
 
 ```sh
 pipkin flash
 ```
 
-Pipkin downloads the latest stable firmware and asks you to confirm before
-installing it. No extra software setup is needed.
+Pipkin downloads the latest firmware, shows you what it's about to do, and only
+goes ahead once you say yes. Updates keep your display's settings. The same
+command sets up a display you've built yourself. The [firmware guide](docs/firmware.md)
+covers supported boards and troubleshooting.
 
-See the [firmware guide](docs/firmware.md) for supported boards, advanced options
-and troubleshooting.
+## Privacy
 
-## Build from source
+Your sign-ins stay on your computer. Pipkin sends them only to Anthropic or
+OpenAI, to read your usage. It never reads your conversations, there's no
+telemetry or Pipkin account, and no Pipkin server ever sees your usage. Apart
+from that, it only contacts GitHub to download updates, firmware and the tool that
+installs firmware. The [data sources guide](docs/data-sources.md) has the details.
 
-With the Go version listed in [go.mod](go.mod):
+## For developers
+
+Everything Pipkin reads is also available as JSON for your own scripts and
+dashboards: run `pipkin usage --json`, or see the [JSON output reference](docs/output.md).
+The display talks a simple text [protocol](docs/protocol.md) over USB serial.
+
+To build from source, install the Go version listed in [go.mod](go.mod), then run:
 
 ```sh
 go test ./...
@@ -86,11 +117,8 @@ go build -o pipkin .
 ./pipkin install
 ```
 
-On Windows, use `go build -o pipkin.exe .` and `.\pipkin.exe install`.
-
-Source layout: [main.go](main.go) is the entry point; [internal/pipkin](internal/pipkin)
-contains the Go implementation and tests; [docs](docs) covers the protocol and JSON
-output; [scripts](scripts) supports releases.
+On Windows, use `go build -o pipkin.exe .` and `.\pipkin.exe install`. The code lives
+in [internal/pipkin](internal/pipkin), with [main.go](main.go) as the entry point.
 
 <p>
   <img src="docs/images/badge-licence.svg" alt="Licence: noncommercial" height="28">

@@ -3,7 +3,6 @@ package pipkin
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,13 +58,11 @@ func TestClaudeCredentialPreference(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(config), 0600); err != nil {
 				t.Fatal(err)
 			}
-			original := usageHTTPClient
-			t.Cleanup(func() { usageHTTPClient = original })
 			profileCalls, usageCalls := 0, 0
-			usageHTTPClient = &http.Client{Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+			stubUsageHTTP(t, func(req *http.Request) *http.Response {
 				if req.URL.Path == "/api/oauth/usage" {
 					usageCalls++
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"five_hour":{"utilization":10}}`)), Header: make(http.Header), Request: req}, nil
+					return testResponse(req, http.StatusOK, `{"five_hour":{"utilization":10}}`)
 				}
 				profileCalls++
 				if req.URL.String() != "https://api.anthropic.com/api/oauth/profile" || req.Header.Get("Authorization") != "Bearer synthetic-code" {
@@ -78,8 +75,8 @@ func TestClaudeCredentialPreference(t *testing.T) {
 				if status == 0 {
 					status = http.StatusOK
 				}
-				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
-			})}
+				return testResponse(req, status, body)
+			})
 			codeCalls, desktopCalls := 0, 0
 			loadCode := func(context.Context) (claudeCredential, error) {
 				codeCalls++

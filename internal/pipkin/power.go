@@ -2,7 +2,7 @@ package pipkin
 
 import (
 	"context"
-	"strconv"
+	"runtime"
 	"time"
 )
 
@@ -34,6 +34,9 @@ func (p hostPower) asleep() bool {
 	return p.systemSleeping || p.displaySleeping || p.shuttingDown
 }
 
+// suspended means the host is going down; only host state may still be sent.
+func (p hostPower) suspended() bool { return p.systemSleeping || p.shuttingDown }
+
 func (p hostPower) state() string {
 	if p.asleep() {
 		return "asleep"
@@ -50,6 +53,28 @@ func (p *hostPower) apply(event powerEvent) {
 	case powerShutdown:
 		p.shuttingDown = event.active
 	}
+}
+
+// startPowerThread runs a native observer on one locked OS thread. run must send
+// exactly one startup result to ready, then observe until ctx is cancelled.
+func startPowerThread(ctx context.Context, run func(context.Context, chan<- error)) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	ready, done := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		run(ctx, ready)
+	}()
+	if err := <-ready; err != nil {
+		cancel()
+		<-done
+		return nil, err
+	}
+	return func() { cancel(); <-done }, nil
 }
 
 // A native pre-sleep callback must never hold the host up indefinitely. Even if
@@ -138,7 +163,7 @@ func (h *Helper) confirmHostPower(ctx context.Context, sequence uint64) bool {
 		return false
 	}
 	h.identifyPending = false
-	if err := h.conn.port.Write(ctx, []byte("v=1 kind=identify\n")); err != nil {
+	if err := h.conn.port.Write(ctx, []byte(identifyPacket)); err != nil {
 		h.disconnect("sleep confirmation write failed: " + err.Error())
 		return false
 	}
@@ -153,8 +178,7 @@ func (h *Helper) confirmHostPower(ctx context.Context, sequence uint64) bool {
 		for _, line := range lines {
 			fields := parseFields(line)
 			if isIdentity(fields) {
-				accepted, _ := strconv.ParseUint(fields["seq"], 10, 64)
-				epoch, _ := strconv.ParseUint(fields["clock_epoch"], 10, 64)
+				accepted, epoch := identityClock(fields)
 				if accepted == sequence && epoch == h.clockEpoch {
 					return true
 				}

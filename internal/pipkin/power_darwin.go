@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,18 +65,9 @@ type darwinPowerMonitor struct {
 }
 
 func startPowerMonitor(ctx context.Context, events chan<- powerEvent) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	monitorCtx, cancel := context.WithCancel(ctx)
-	ready := make(chan error, 1)
-	done := make(chan struct{})
-	go func() {
-		// NSWorkspace and IOKit deliver notifications through this thread's run
-		// loop. Keep registration, processing and teardown on that same thread.
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		defer close(done)
+	// NSWorkspace and IOKit deliver notifications through this thread's run
+	// loop. Keep registration, processing and teardown on that same thread.
+	return startPowerThread(ctx, func(ctx context.Context, ready chan<- error) {
 		api, err := loadDarwinPowerAPI()
 		if err != nil {
 			ready <- err
@@ -85,7 +75,7 @@ func startPowerMonitor(ctx context.Context, events chan<- powerEvent) (func(), e
 		}
 		pool := darwinAutoreleasePool()
 		defer pool.Send(objc.RegisterName("drain"))
-		monitor := &darwinPowerMonitor{ctx: monitorCtx, events: events, api: api, id: uintptr(darwinPowerNextID.Add(1))}
+		monitor := &darwinPowerMonitor{ctx: ctx, events: events, api: api, id: uintptr(darwinPowerNextID.Add(1))}
 		defer monitor.close()
 		if err := monitor.open(); err != nil {
 			ready <- err
@@ -94,13 +84,13 @@ func startPowerMonitor(ctx context.Context, events chan<- powerEvent) (func(), e
 		// Seed the reducer before startup returns; restarting the helper while
 		// displays are asleep must not briefly wake Pipkin.
 		monitor.reconcileDisplays()
-		if err := monitorCtx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			ready <- err
 			return
 		}
 		ready <- nil
 		nextDisplayCheck := time.Now().Add(time.Second)
-		for monitorCtx.Err() == nil {
+		for ctx.Err() == nil {
 			iterationPool := darwinAutoreleasePool()
 			// A bounded run avoids cross-thread stop races and lets cancellation
 			// finish without depending on another native notification arriving.
@@ -116,13 +106,7 @@ func startPowerMonitor(ctx context.Context, events chan<- powerEvent) (func(), e
 			monitor.recoverCancelledShutdown(now)
 			iterationPool.Send(objc.RegisterName("drain"))
 		}
-	}()
-	if err := <-ready; err != nil {
-		cancel()
-		<-done
-		return nil, err
-	}
-	return func() { cancel(); <-done }, nil
+	})
 }
 
 func darwinAutoreleasePool() objc.ID {
@@ -132,57 +116,38 @@ func darwinAutoreleasePool() objc.ID {
 func loadDarwinPowerAPI() (*darwinPowerAPI, error) {
 	darwinPowerNative.Do(func() {
 		api := &darwinPowerAPI{}
-		framework := func(name string) (uintptr, error) {
-			return purego.Dlopen("/System/Library/Frameworks/"+name+".framework/"+name, purego.RTLD_NOW|purego.RTLD_LOCAL)
-		}
-		appkit, err := framework("AppKit")
-		if err != nil {
-			darwinPowerNative.err = err
-			return
-		}
-		cf, err := framework("CoreFoundation")
-		if err != nil {
-			darwinPowerNative.err = err
-			return
-		}
-		io, err := framework("IOKit")
-		if err != nil {
-			darwinPowerNative.err = err
-			return
-		}
-		cg, err := framework("CoreGraphics")
-		if err != nil {
-			darwinPowerNative.err = err
-			return
-		}
-		bind := func(destination any, library uintptr, symbol string) {
-			if darwinPowerNative.err != nil {
-				return
+		var err error
+		open := func(name string) (library uintptr) {
+			if err == nil {
+				library, err = purego.Dlopen("/System/Library/Frameworks/"+name+".framework/"+name, purego.RTLD_NOW|purego.RTLD_LOCAL)
 			}
-			address, err := purego.Dlsym(library, symbol)
+			return library
+		}
+		symbol := func(library uintptr, name string) (address uintptr) {
+			if err == nil {
+				address, err = purego.Dlsym(library, name)
+			}
+			return address
+		}
+		bind := func(destination any, library uintptr, name string) {
+			if address := symbol(library, name); err == nil {
+				purego.RegisterFunc(destination, address)
+			}
+		}
+		constant := func(library uintptr, name string) uintptr {
+			address := symbol(library, name)
 			if err != nil {
-				darwinPowerNative.err = err
-				return
-			}
-			purego.RegisterFunc(destination, address)
-		}
-		constant := func(library uintptr, symbol string) uintptr {
-			if darwinPowerNative.err != nil {
-				return 0
-			}
-			address, err := purego.Dlsym(library, symbol)
-			if err != nil {
-				darwinPowerNative.err = err
 				return 0
 			}
 			// The symbol is a framework-owned pointer to a CF/Objective-C object.
 			pointer := *(*unsafe.Pointer)(unsafe.Pointer(&address))
 			value := *(*uintptr)(pointer)
 			if value == 0 {
-				darwinPowerNative.err = fmt.Errorf("empty native constant %s", symbol)
+				err = fmt.Errorf("empty native constant %s", name)
 			}
 			return value
 		}
+		appkit, cf, io, cg := open("AppKit"), open("CoreFoundation"), open("IOKit"), open("CoreGraphics")
 		bind(&api.getRunLoop, cf, "CFRunLoopGetCurrent")
 		bind(&api.addSource, cf, "CFRunLoopAddSource")
 		bind(&api.removeSource, cf, "CFRunLoopRemoveSource")
@@ -199,14 +164,13 @@ func loadDarwinPowerAPI() (*darwinPowerAPI, error) {
 		api.screensSleep = objc.ID(constant(appkit, "NSWorkspaceScreensDidSleepNotification"))
 		api.screensWake = objc.ID(constant(appkit, "NSWorkspaceScreensDidWakeNotification"))
 		api.powerOff = objc.ID(constant(appkit, "NSWorkspaceWillPowerOffNotification"))
-		if darwinPowerNative.err != nil {
-			return
+		if err == nil {
+			api.observerClass, err = objc.RegisterClass("PipkinPowerObserver", objc.GetClass("NSObject"), nil, nil, []objc.MethodDef{
+				{Cmd: objc.RegisterName("screensDidSleep:"), Fn: darwinScreensDidSleep},
+				{Cmd: objc.RegisterName("screensDidWake:"), Fn: darwinScreensDidWake},
+				{Cmd: objc.RegisterName("willPowerOff:"), Fn: darwinWillPowerOff},
+			})
 		}
-		api.observerClass, err = objc.RegisterClass("PipkinPowerObserver", objc.GetClass("NSObject"), nil, nil, []objc.MethodDef{
-			{Cmd: objc.RegisterName("screensDidSleep:"), Fn: darwinScreensDidSleep},
-			{Cmd: objc.RegisterName("screensDidWake:"), Fn: darwinScreensDidWake},
-			{Cmd: objc.RegisterName("willPowerOff:"), Fn: darwinWillPowerOff},
-		})
 		if err != nil {
 			darwinPowerNative.err = err
 			return
@@ -221,9 +185,6 @@ func loadDarwinPowerAPI() (*darwinPowerAPI, error) {
 }
 
 func (m *darwinPowerMonitor) open() error {
-	if err := m.ctx.Err(); err != nil {
-		return err
-	}
 	m.runLoop = m.api.getRunLoop()
 	workspace := objc.ID(objc.GetClass("NSWorkspace")).Send(objc.RegisterName("sharedWorkspace"))
 	m.center = workspace.Send(objc.RegisterName("notificationCenter"))
@@ -316,19 +277,15 @@ func darwinDisplaysAsleep(online func(uint32, *uint32, *uint32) int32, asleep fu
 	return true, true
 }
 
-func darwinScreensDidSleep(self objc.ID, _ objc.SEL, _ objc.ID) {
-	if value, ok := darwinPowerObservers.Load(self); ok {
-		m := value.(*darwinPowerMonitor)
-		m.displaySleeping.Store(true)
-		m.postDisplayState(true)
-	}
-}
+func darwinScreensDidSleep(self objc.ID, _ objc.SEL, _ objc.ID) { darwinScreensChanged(self, true) }
 
-func darwinScreensDidWake(self objc.ID, _ objc.SEL, _ objc.ID) {
+func darwinScreensDidWake(self objc.ID, _ objc.SEL, _ objc.ID) { darwinScreensChanged(self, false) }
+
+func darwinScreensChanged(self objc.ID, asleep bool) {
 	if value, ok := darwinPowerObservers.Load(self); ok {
 		m := value.(*darwinPowerMonitor)
-		m.displaySleeping.Store(false)
-		m.postDisplayState(false)
+		m.displaySleeping.Store(asleep)
+		m.postDisplayState(asleep)
 	}
 }
 

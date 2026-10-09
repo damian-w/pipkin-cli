@@ -14,14 +14,24 @@ import (
 
 func configHome() string { return envOr("XDG_CONFIG_HOME", filepath.Join(homeDir(), ".config")) }
 
+const systemdUnit = "pipkin.service"
+
 func systemdUnitPath() string {
-	return filepath.Join(configHome(), "systemd", "user", "pipkin.service")
+	return filepath.Join(configHome(), "systemd", "user", systemdUnit)
 }
 
 func desktopEntryPath() string { return filepath.Join(configHome(), "autostart", "pipkin.desktop") }
 
-func hasSystemd() bool {
-	return serviceCommand("systemctl", "--user", "show-environment") == nil
+func systemctl(args ...string) error {
+	return serviceCommand("systemctl", append([]string{"--user"}, args...)...)
+}
+
+func hasSystemd() bool { return systemctl("show-environment") == nil }
+
+// systemdManaged reports whether the helper runs as an installed systemd user unit.
+func systemdManaged() (bool, error) {
+	exists, err := pathExists(systemdUnitPath())
+	return exists && hasSystemd(), err
 }
 
 func systemdArgument(value string) string {
@@ -47,10 +57,10 @@ func registerAutostart() (string, error) {
 		if err := writeFileAtomic(systemdUnitPath(), []byte(unit), 0o644); err != nil {
 			return "", err
 		}
-		if err := serviceCommand("systemctl", "--user", "daemon-reload"); err != nil {
+		if err := systemctl("daemon-reload"); err != nil {
 			return "", err
 		}
-		if err := serviceCommand("systemctl", "--user", "enable", "pipkin.service"); err != nil {
+		if err := systemctl("enable", systemdUnit); err != nil {
 			return "", err
 		}
 		if err := removeIfExists(desktopEntryPath()); err != nil {
@@ -75,7 +85,7 @@ func snapshotAutostart() (func() error, error) {
 	managed := hasSystemd()
 	enabled := false
 	if managed && unit.present {
-		err := serviceCommand("systemctl", "--user", "is-enabled", "pipkin.service")
+		err := systemctl("is-enabled", systemdUnit)
 		if err == nil {
 			enabled = true
 		} else {
@@ -91,15 +101,15 @@ func snapshotAutostart() (func() error, error) {
 			if current, err := pathExists(systemdUnitPath()); err != nil {
 				disableErr = err
 			} else if current {
-				disableErr = serviceCommand("systemctl", "--user", "disable", "pipkin.service")
+				disableErr = systemctl("disable", systemdUnit)
 			}
 		}
 		filesErr := errors.Join(unit.restore(), desktop.restore())
 		var reloadErr, enableErr error
 		if managed {
-			reloadErr = serviceCommand("systemctl", "--user", "daemon-reload")
+			reloadErr = systemctl("daemon-reload")
 			if enabled && filesErr == nil {
-				enableErr = serviceCommand("systemctl", "--user", "enable", "pipkin.service")
+				enableErr = systemctl("enable", systemdUnit)
 			}
 		}
 		return errors.Join(disableErr, filesErr, reloadErr, enableErr)
@@ -112,16 +122,17 @@ func removeAutostart() error {
 		return err
 	}
 	if exists {
-		if hasSystemd() {
-			if err := serviceCommand("systemctl", "--user", "disable", "pipkin.service"); err != nil {
+		managed := hasSystemd()
+		if managed {
+			if err := systemctl("disable", systemdUnit); err != nil {
 				return err
 			}
 		}
 		if err := removeIfExists(systemdUnitPath()); err != nil {
 			return err
 		}
-		if hasSystemd() {
-			if err := serviceCommand("systemctl", "--user", "daemon-reload"); err != nil {
+		if managed {
+			if err := systemctl("daemon-reload"); err != nil {
 				return err
 			}
 		}
@@ -130,30 +141,23 @@ func removeAutostart() error {
 }
 
 func startService() error {
-	exists, err := pathExists(systemdUnitPath())
+	managed, err := systemdManaged()
 	if err != nil {
 		return err
 	}
-	if exists && hasSystemd() {
-		return serviceCommand("systemctl", "--user", "start", "pipkin.service")
+	if managed {
+		return systemctl("start", systemdUnit)
 	}
 	return startDetachedHelper()
 }
 
 func stopService() error {
-	exists, err := pathExists(systemdUnitPath())
-	if err != nil {
+	managed, err := systemdManaged()
+	if err != nil || !managed {
 		return err
 	}
-	if exists && hasSystemd() {
-		return serviceCommand("systemctl", "--user", "stop", "pipkin.service")
-	}
-	return nil
+	return systemctl("stop", systemdUnit)
 }
-
-func updateUserPath(string, bool) error { return nil }
-
-func userPathContains(string) (bool, error) { return false, nil }
 
 func serialPermissionHint() string {
 	current, err := user.Current()
@@ -174,5 +178,3 @@ func serialPermissionHint() string {
 	}
 	return ""
 }
-
-func removeInstallation() error { return os.RemoveAll(appDir()) }

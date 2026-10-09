@@ -17,7 +17,7 @@ import (
 
 func TestConfigUpdatesPreserveOtherFields(t *testing.T) {
 	t.Setenv("PIPKIN_HOME", t.TempDir())
-	original := []byte(`{"salt":"existing-identity","port":"manual","last_port":"old","future":{"large":9007199254740993},"claude_previous_statusline":{"command":"custom"}}`)
+	original := []byte(`{"salt":"existing-identity","port":"manual","last_port":"old","future":{"large":9007199254740993}}`)
 	if err := os.MkdirAll(appDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +51,7 @@ func TestConfigUpdatesPreserveOtherFields(t *testing.T) {
 		t.Fatal("unknown configuration fields must be preserved without rounding")
 	}
 	config, err := initializedConfig()
-	if err != nil || config.Salt != "existing-identity" || config.Port != "new manual" || config.LastPort != "new detected" ||
-		!bytes.Contains(config.ClaudePreviousStatusLine, []byte("custom")) {
+	if err != nil || config.Salt != "existing-identity" || config.Port != "new manual" || config.LastPort != "new detected" {
 		t.Fatal("individual updates must retain the existing identity and unrelated settings")
 	}
 }

@@ -108,7 +108,7 @@ func (h *Helper) send(fields string) bool {
 	if generation != h.generation && strings.HasPrefix(fields, "kind=usage ") {
 		return false
 	}
-	if (h.power.systemSleeping || h.power.shuttingDown) && !strings.HasPrefix(fields, "kind=host ") {
+	if h.power.suspended() && !strings.HasPrefix(fields, "kind=host ") {
 		return false
 	}
 	h.sequence++
@@ -187,8 +187,7 @@ func (h *Helper) connectPorts(ctx context.Context, ports []string, open func(str
 }
 
 func (h *Helper) resync(identity map[string]string) {
-	seq, _ := strconv.ParseUint(identity["seq"], 10, 64)
-	epoch, _ := strconv.ParseUint(identity["clock_epoch"], 10, 64)
+	seq, epoch := identityClock(identity)
 	if seq < h.sequence && epoch == h.clockEpoch {
 		h.invalidateObservations()
 	}
@@ -304,8 +303,7 @@ func (h *Helper) handleInput() {
 			continue
 		}
 		h.identifyPending = false
-		seq, _ := strconv.ParseUint(fields["seq"], 10, 64)
-		epoch, _ := strconv.ParseUint(fields["clock_epoch"], 10, 64)
+		seq, epoch := identityClock(fields)
 		device, err := strconv.ParseInt(fields["unix"], 10, 64)
 		switch {
 		case seq < h.identifySequence || epoch != h.clockEpoch:
@@ -409,7 +407,7 @@ func (h *Helper) run(ctx context.Context) {
 		h.ctx = shutdown
 		if h.conn != nil {
 			state := "disconnected"
-			if h.power.systemSleeping || h.power.shuttingDown {
+			if h.power.suspended() {
 				state = "asleep"
 			}
 			h.send("kind=host state=" + state)
@@ -445,7 +443,7 @@ func (h *Helper) run(ctx context.Context) {
 		now := h.now()
 		h.observeClock(now, lastWall, lastMono)
 		lastWall, lastMono = now.Round(0), now
-		if h.power.systemSleeping || h.power.shuttingDown {
+		if h.power.suspended() {
 			select {
 			case <-ctx.Done():
 				return
@@ -464,7 +462,7 @@ func (h *Helper) run(ctx context.Context) {
 			return
 		}
 		h.drainPowerEvents(events)
-		if h.power.systemSleeping || h.power.shuttingDown {
+		if h.power.suspended() {
 			continue
 		}
 		if h.conn != nil {
@@ -478,7 +476,7 @@ func (h *Helper) run(ctx context.Context) {
 		h.pollProviders(ctx, now)
 		if h.conn != nil {
 			h.drainPowerEvents(events)
-			if h.power.systemSleeping || h.power.shuttingDown {
+			if h.power.suspended() {
 				continue
 			}
 			if now.After(h.due["heartbeat"]) {
@@ -488,7 +486,7 @@ func (h *Helper) run(ctx context.Context) {
 			if h.conn != nil && now.After(h.due["identify"]) {
 				h.due["identify"] = now.Add(identifyEvery)
 				writeCtx, cancel := context.WithTimeout(ctx, powerWriteTimeout)
-				err := h.conn.port.Write(writeCtx, []byte("v=1 kind=identify\n"))
+				err := h.conn.port.Write(writeCtx, []byte(identifyPacket))
 				cancel()
 				if err != nil {
 					h.disconnect("write failed: " + err.Error())

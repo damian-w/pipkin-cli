@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -24,30 +25,44 @@ type flashOptions struct {
 	Reinstall            bool
 }
 
-func parseFlashOptions(args []string) (flashOptions, error) {
-	var options flashOptions
-	flags := flag.NewFlagSet("flash", flag.ContinueOnError)
+// parseOptions parses flag-only arguments. The named string options need a value.
+func parseOptions(name string, args []string, define func(*flag.FlagSet), valued ...string) error {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.StringVar(&options.Port, "port", "", "serial port")
-	flags.StringVar(&options.Version, "version", "", "stable firmware version")
-	flags.StringVar(&options.Board, "board", "", "physically confirmed board profile")
-	flags.BoolVar(&options.Reinstall, "reinstall", false, "reinstall the same firmware version")
+	define(flags)
 	if err := flags.Parse(args); err != nil {
-		return options, err
+		return err
 	}
 	if flags.NArg() != 0 {
-		return options, errors.New("flash takes options only")
+		return fmt.Errorf("%s takes options only", name)
 	}
-	var emptyOption string
+	var empty string
 	flags.Visit(func(option *flag.Flag) {
-		if (option.Name == "port" || option.Name == "version" || option.Name == "board") && option.Value.String() == "" {
-			emptyOption = option.Name
+		if slices.Contains(valued, option.Name) && option.Value.String() == "" {
+			empty = option.Name
 		}
 	})
-	if emptyOption != "" {
-		return options, fmt.Errorf("--%s requires a value", emptyOption)
+	if empty != "" {
+		return fmt.Errorf("--%s requires a value", empty)
 	}
-	if options.Port != "" && (len(options.Port) > 256 || strings.HasPrefix(options.Port, "-") || strings.TrimSpace(options.Port) != options.Port || terminalText(options.Port) != options.Port) {
+	return nil
+}
+
+func validPortOption(port string) bool {
+	return port == "" || len(port) <= 256 && !strings.HasPrefix(port, "-") && strings.TrimSpace(port) == port && terminalText(port) == port
+}
+
+func parseFlashOptions(args []string) (flashOptions, error) {
+	var options flashOptions
+	if err := parseOptions("flash", args, func(flags *flag.FlagSet) {
+		flags.StringVar(&options.Port, "port", "", "serial port")
+		flags.StringVar(&options.Version, "version", "", "stable firmware version")
+		flags.StringVar(&options.Board, "board", "", "physically confirmed board profile")
+		flags.BoolVar(&options.Reinstall, "reinstall", false, "reinstall the same firmware version")
+	}, "port", "version", "board"); err != nil {
+		return options, err
+	}
+	if !validPortOption(options.Port) {
 		return options, errors.New("invalid serial port")
 	}
 	if options.Version != "" {
@@ -62,22 +77,33 @@ func parseFlashOptions(args []string) (flashOptions, error) {
 	return options, nil
 }
 
-func maintenanceLockPath() string {
-	dir := filepath.Clean(appDir())
-	return filepath.Join(filepath.Dir(dir), "."+filepath.Base(dir)+"-flash.lock")
-}
-
 type firmwareFlasher interface {
-	Probe(context.Context, string) (flashProbe, error)
+	boardInspector
 	Read(context.Context, string, int64, int64) ([]byte, error)
 	Write(context.Context, string, []flashWriteImage) error
-	Reset(context.Context, string) error
 	EraseSettings(context.Context, string) error
 }
 
 type flashActions struct {
-	load     func(context.Context, string) (*firmwareRelease, error)
-	prepare  func(context.Context, io.Writer) (firmwareFlasher, error)
+	boardActions
+	load    func(context.Context, string) (*firmwareRelease, error)
+	prepare func(context.Context, io.Writer) (firmwareFlasher, error)
+}
+
+func defaultFlashActions() flashActions {
+	return flashActions{
+		boardActions: defaultBoardActions(),
+		load: func(ctx context.Context, selected string) (*firmwareRelease, error) {
+			return publicFirmwareSource().stage(ctx, selected, version, filepath.Join(appDir(), "cache", "firmware"))
+		},
+		prepare: func(ctx context.Context, output io.Writer) (firmwareFlasher, error) {
+			return prepareFlashTool(ctx, output)
+		},
+	}
+}
+
+// boardActions free the display's serial port from the helper for a board operation.
+type boardActions struct {
 	ports    func() []string
 	identity func(context.Context, string, time.Duration) (map[string]string, error)
 	running  func() (bool, error)
@@ -85,17 +111,71 @@ type flashActions struct {
 	start    func() error
 }
 
-func defaultFlashActions() flashActions {
-	return flashActions{
-		load: func(ctx context.Context, selected string) (*firmwareRelease, error) {
-			return publicFirmwareSource().stage(ctx, selected, version, filepath.Join(appDir(), "cache", "firmware"))
-		},
-		prepare: func(ctx context.Context, output io.Writer) (firmwareFlasher, error) {
-			return prepareFlashTool(ctx, output)
-		},
-		ports: candidatePorts, identity: readFlashIdentity,
-		running: helperRunning, stop: stopHelper, start: startHelper,
+func defaultBoardActions() boardActions {
+	return boardActions{ports: candidatePorts, identity: readFlashIdentity, running: helperRunning, stop: stopHelper, start: startHelper}
+}
+
+// boardSession holds the installation and maintenance locks for one board
+// operation. close resets the board and resumes the helper independently of
+// the operation's cancelled context.
+type boardSession struct {
+	boardActions
+	installation, maintenance *os.File
+	port                      string
+	reset                     func(context.Context, string) error // set once ROM probing may reset the board
+	restoreHelper             bool
+}
+
+func openBoardSession(actions boardActions, purpose string) (*boardSession, error) {
+	installation, err := acquireFileLock(installationLockPath())
+	if err != nil {
+		return nil, fmt.Errorf("could not lock installation for %s: %w", purpose, err)
 	}
+	maintenance, err := acquireFileLock(maintenanceLockPath())
+	if err != nil {
+		installation.Close()
+		return nil, fmt.Errorf("another board or firmware operation is in progress: %w", err)
+	}
+	return &boardSession{boardActions: actions, installation: installation, maintenance: maintenance}, nil
+}
+
+// claimPort pauses a running helper, then reads the identity of any responding Pipkin.
+func (s *boardSession) claimPort(ctx context.Context) (map[string]string, error) {
+	running, err := s.running()
+	if err != nil {
+		return nil, err
+	}
+	if running {
+		s.restoreHelper = true // A failed stop may already have interrupted service.
+		if err := s.stop(); err != nil {
+			return nil, fmt.Errorf("could not release the display connection: %w", err)
+		}
+	}
+	identity, err := s.identity(ctx, s.port, 3500*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("could not inspect %s (check serial permissions and close other serial tools): %w", terminalText(s.port), err)
+	}
+	return identity, nil
+}
+
+func (s *boardSession) close(result *error) {
+	if s.reset != nil {
+		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		if err := s.reset(cleanup, s.port); err != nil {
+			*result = errors.Join(*result, fmt.Errorf("could not restart the board; reconnect its USB cable: %w", err))
+		}
+		cancel()
+	}
+	// runCommand waits for this lock at startup, so release it before resuming the helper.
+	if err := s.maintenance.Close(); err != nil {
+		*result = errors.Join(*result, err)
+	}
+	if s.restoreHelper {
+		if err := s.start(); err != nil {
+			*result = errors.Join(*result, fmt.Errorf("could not resume the helper; run pipkin start: %w", err))
+		}
+	}
+	s.installation.Close()
 }
 
 func flashCommand(args []string) error {
@@ -161,45 +241,23 @@ func validateFlashProbe(probe flashProbe, manifest firmwareManifest) error {
 // runFlash keeps service restoration independent of the operation's cancelled
 // context. No ROM write or erase is reachable without explicit confirmation.
 func runFlash(ctx context.Context, options flashOptions, input io.Reader, output io.Writer, actions flashActions) (result error) {
-	installation, err := acquireFileLock(installationLockPath())
-	if err != nil {
-		return fmt.Errorf("could not lock installation for flashing: %w", err)
-	}
-	defer installation.Close()
-	maintenance, err := acquireFileLock(maintenanceLockPath())
-	if err != nil {
-		return fmt.Errorf("another firmware operation is in progress: %w", err)
-	}
-	var tool firmwareFlasher
-	var port string
-	var selectedVersion string
-	resetNeeded, restoreHelper, writeStarted, firmwareRunning := false, false, false, false
-	defer func() {
-		if resetNeeded {
-			cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			resetErr := tool.Reset(cleanup, port)
-			cancel()
-			if resetErr != nil {
-				result = errors.Join(result, fmt.Errorf("could not restart the board; reconnect its USB cable: %w", resetErr))
-			}
-		}
-		// runCommand waits for this lock at startup, including service restarts.
-		if err := maintenance.Close(); err != nil {
-			result = errors.Join(result, err)
-		}
-		if restoreHelper {
-			if err := actions.start(); err != nil {
-				result = errors.Join(result, fmt.Errorf("could not resume the helper; run pipkin start: %w", err))
-			}
-		}
-		if result != nil && writeStarted && !firmwareRunning {
-			result = fmt.Errorf("%w; reconnect USB and retry pipkin flash --port %s --version %s --reinstall (there is no automatic rollback)", result, terminalText(port), selectedVersion)
-		}
-	}()
-	port, err = selectFlashPort(options.Port, actions.ports())
+	session, err := openBoardSession(actions.boardActions, "flashing")
 	if err != nil {
 		return err
 	}
+	var selectedVersion string
+	writeStarted, firmwareRunning := false, false
+	defer func() {
+		session.close(&result)
+		if result != nil && writeStarted && !firmwareRunning {
+			result = fmt.Errorf("%w; reconnect USB and retry pipkin flash --port %s --version %s --reinstall (there is no automatic rollback)", result, terminalText(session.port), selectedVersion)
+		}
+	}()
+	port, err := selectFlashPort(options.Port, actions.ports())
+	if err != nil {
+		return err
+	}
+	session.port = port
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -216,30 +274,22 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := validateFirmwareManifest(release.Manifest, release.Tag, version); err != nil {
 		return err
 	}
-	tool, err = actions.prepare(ctx, output)
+	tool, err := actions.prepare(ctx, output)
 	if err != nil {
 		return fmt.Errorf("could not prepare the firmware flasher: %w", err)
 	}
-	restoreHelper, err = actions.running()
+	identity, err := session.claimPort(ctx)
 	if err != nil {
 		return err
-	}
-	if restoreHelper {
-		if err := actions.stop(); err != nil {
-			return fmt.Errorf("could not release the display connection: %w", err)
-		}
-	}
-	identity, err := actions.identity(ctx, port, 3500*time.Millisecond)
-	if err != nil {
-		return fmt.Errorf("could not inspect %s (check serial permissions and close other serial tools): %w", terminalText(port), err)
 	}
 	if err := validateFlashIdentity(identity, release.Manifest); err != nil {
 		return err
 	}
-	current := "Not identified as Pipkin"
+	current, installed := "Not identified as Pipkin", ""
 	if identity != nil {
 		current = "Pipkin " + terminalText(identity["firmware"])
-		if strings.TrimPrefix(identity["firmware"], "v") == release.Manifest.Version && !options.Reinstall {
+		installed = strings.TrimPrefix(identity["firmware"], "v")
+		if installed == release.Manifest.Version && !options.Reinstall {
 			_, err := fmt.Fprintf(output, "Pipkin firmware %s is up to date. Use --reinstall to flash it again.\n", release.Manifest.Version)
 			if err == nil && options.Board != "" {
 				_, err = fmt.Fprintf(output, "To remember the physical board without flashing, run pipkin identify --board %s.\n", terminalText(options.Board))
@@ -250,7 +300,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 			return errors.New("the board has newer firmware than the latest published release; use --version VERSION to explicitly select a downgrade")
 		}
 	}
-	resetNeeded = true // ROM probing can reset even when it fails midway.
+	session.reset = tool.Reset // ROM probing can reset even when it fails midway.
 	probe, err := tool.Probe(ctx, port)
 	if err != nil {
 		return fmt.Errorf("could not check the ESP32 bootloader (close other serial tools, or hold BOOT while connecting): %w", err)
@@ -264,14 +314,14 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		if err != nil {
 			return err
 		}
-		boardInfo = identifyBoardInfo{Profile: v.ID, Name: v.Name, FirmwareProfile: p.ID, Status: "confirmed for this flash"}
+		boardInfo = catalogBoardInfo(p, v, "confirmed for this flash")
 	} else {
 		boardInfo, err = inspectBoard(probe, "")
 		if err != nil {
 			return err
 		}
 	}
-	if boardInfo.Profile != "" && !profileCompatibleWithManifest(boardInfo.Profile, release.Manifest) {
+	if boardInfo.Profile != "" && !sameFirmwareBoard(boardInfo.FirmwareProfile, release.Manifest.Board) {
 		return errors.New("confirmed board profile is incompatible with the selected firmware; no firmware was written")
 	}
 	partition, partitionPath := release.image("partition-table")
@@ -284,19 +334,20 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		return fmt.Errorf("could not check the existing partition layout: %w", err)
 	}
 	updating := identity != nil
-	storedVersion := ""
 	if !updating {
 		// A board in the ROM loader, or with an interrupted app, cannot answer
 		// identify. Inspect its app description before treating it as a new board
 		// and clearing a kit owner's settings. This is stored identity only.
-		prefix, err := tool.Read(ctx, port, 0x10000, 1024)
+		prefix, err := tool.Read(ctx, port, applicationOffset, 1024)
 		if err != nil {
 			return fmt.Errorf("could not inspect existing firmware: %w", err)
 		}
+		var storedVersion string
 		storedVersion, updating = readPipkinFirmwareVersion(prefix)
 		if updating {
 			current = "Pipkin " + terminalText(storedVersion) + " (stored; not responding)"
-			if strings.TrimPrefix(storedVersion, "v") == release.Manifest.Version && !options.Reinstall {
+			installed = strings.TrimPrefix(storedVersion, "v")
+			if installed == release.Manifest.Version && !options.Reinstall {
 				return fmt.Errorf("Pipkin firmware %s is installed but did not respond; use --reinstall to repair it", storedVersion)
 			}
 			if newerStableFirmware(storedVersion, release.Manifest.Version) && options.Version == "" {
@@ -310,13 +361,9 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	action, effect := "Install", "Replaces existing board firmware and settings."
 	if updating {
 		action, effect = "Update", "Keeps the board's selected page."
-		currentVersion := strings.TrimPrefix(storedVersion, "v")
-		if identity != nil {
-			currentVersion = strings.TrimPrefix(identity["firmware"], "v")
-		}
-		if options.Reinstall && currentVersion == release.Manifest.Version {
+		if options.Reinstall && installed == release.Manifest.Version {
 			action = "Reinstall"
-		} else if newerStableFirmware(currentVersion, release.Manifest.Version) {
+		} else if newerStableFirmware(installed, release.Manifest.Version) {
 			action = "Downgrade"
 		}
 	}
@@ -379,7 +426,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := tool.Reset(ctx, port); err != nil {
 		return fmt.Errorf("firmware written, but board restart failed: %w", err)
 	}
-	resetNeeded = false
+	session.reset = nil
 	booted, err := actions.identity(ctx, port, 12*time.Second)
 	if err != nil {
 		return fmt.Errorf("firmware written, but startup could not be checked: %w", err)

@@ -39,10 +39,9 @@ func TestCredentialFileLimits(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		limit int
-		read  func(string) ([]byte, error)
 	}{
-		{"codex", 1 << 20, readCodexAuthFile},
-		{"claude", 4 << 20, readClaudeFile},
+		{"codex", maxCredentialSize},
+		{"claude", maxClaudeFileSize},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "credentials")
@@ -50,7 +49,7 @@ func TestCredentialFileLimits(t *testing.T) {
 				if err := os.WriteFile(path, []byte(strings.Repeat("private-content", size/15+1)[:size]), 0600); err != nil {
 					t.Fatal(err)
 				}
-				data, err := test.read(path)
+				data, err := readFileBounded(path, int64(test.limit))
 				if size == test.limit {
 					if err != nil || len(data) != size {
 						t.Fatalf("boundary rejected: %v", err)

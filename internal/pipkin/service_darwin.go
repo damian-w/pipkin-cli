@@ -75,10 +75,4 @@ func stopService() error {
 	return err
 }
 
-func updateUserPath(string, bool) error { return nil }
-
-func userPathContains(string) (bool, error) { return false, nil }
-
 func serialPermissionHint() string { return "" }
-
-func removeInstallation() error { return os.RemoveAll(appDir()) }

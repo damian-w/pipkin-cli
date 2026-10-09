@@ -18,12 +18,6 @@ const (
 	maxChecksumBytes = 1 << 20
 )
 
-// Keep the lock outside the installation so uninstall cannot replace it.
-func installationLockPath() string {
-	dir := filepath.Clean(appDir())
-	return filepath.Join(filepath.Dir(dir), "."+filepath.Base(dir)+"-installation.lock")
-}
-
 type binaryArtifact struct {
 	name, asset, staged string
 }
@@ -107,30 +101,12 @@ func stageLocalBinaries(source, target, goos, goarch string) (_ *stagedBinaries,
 	return staged, nil
 }
 
-func copyBounded(writer io.Writer, reader io.Reader, limit int64) error {
-	n, err := io.Copy(writer, io.LimitReader(reader, limit+1))
-	if err != nil {
-		return err
-	}
-	if n > limit {
-		return fmt.Errorf("%w (%d bytes)", errReadTooLarge, limit)
-	}
-	return nil
-}
-
 func downloadTo(url string, writer io.Writer, limit int64) error {
-	response, err := httpClient.Get(url)
+	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %s", url, response.Status)
-	}
-	if response.ContentLength > limit {
-		return fmt.Errorf("%w (%d bytes)", errReadTooLarge, limit)
-	}
-	return copyBounded(writer, response.Body, limit)
+	return download(httpClient, request, writer, limit)
 }
 
 func writeStagedFile(path string, write func(io.Writer) error) error {
@@ -244,14 +220,11 @@ func (s *stagedBinaries) validateTargets() error {
 }
 
 func (s *stagedBinaries) replace() (*binaryReplacement, error) {
-	if err := s.validateTargets(); err != nil {
-		return nil, err
-	}
 	replacement := &binaryReplacement{target: s.target, artifacts: s.artifacts,
 		backedUp: make([]bool, len(s.artifacts)), installed: make([]bool, len(s.artifacts))}
 	for i, artifact := range s.artifacts {
 		path := filepath.Join(s.target, artifact.name)
-		if err := os.Remove(path + ".old"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeIfExists(path + ".old"); err != nil {
 			return nil, errors.Join(err, replacement.rollback())
 		}
 		if err := os.Rename(path, path+".old"); err == nil {
@@ -274,7 +247,7 @@ func (r *binaryReplacement) rollback() error {
 	for i := len(r.artifacts) - 1; i >= 0; i-- {
 		path := filepath.Join(r.target, r.artifacts[i].name)
 		if r.installed[i] {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := removeIfExists(path); err != nil {
 				failures = append(failures, fmt.Errorf("could not remove replacement %s: %w", r.artifacts[i].name, err))
 				continue
 			}
@@ -323,13 +296,10 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 	if err != nil {
 		return "", fmt.Errorf("could not read previous automatic start: %w", err)
 	}
-	if err := actions.stop(); err != nil {
-		if pid != 0 {
-			err = errors.Join(err, actions.start())
-		}
-		return "", err
+	var replacement *binaryReplacement
+	if err = actions.stop(); err == nil {
+		replacement, err = staged.replace()
 	}
-	replacement, err := staged.replace()
 	if err != nil {
 		if pid != 0 {
 			err = errors.Join(err, actions.start())
@@ -337,7 +307,7 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 		return "", err
 	}
 	startAttempted := false
-	recover := func(cause error) (string, error) {
+	fail := func(cause error) (string, error) {
 		if startAttempted {
 			if err := actions.stop(); err != nil {
 				return "", errors.Join(cause, fmt.Errorf("could not stop replacement helper; original binaries remain in .old backups: %w", err))
@@ -361,22 +331,22 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 		}
 		return "", cause
 	}
-	// Older startup definitions may omit the custom installation directory.
+	// Rewrite startup so it launches the binaries just installed.
 	mechanism, err := actions.register()
 	if err != nil {
-		return recover(err)
+		return fail(err)
 	}
 	if actions.authorize != nil {
 		actions.authorize()
 	}
 	if actions.configure != nil {
 		if err := actions.configure(); err != nil {
-			return recover(err)
+			return fail(err)
 		}
 	}
 	startAttempted = true
 	if err := actions.start(); err != nil {
-		return recover(err)
+		return fail(err)
 	}
 	replacement.finish()
 	return mechanism, nil

@@ -15,29 +15,13 @@ import (
 
 const identifyUSBOutputLimit = 4 << 20
 
-type identifyUSBOutput struct {
-	bytes.Buffer
-	truncated bool
-}
-
-func (b *identifyUSBOutput) Write(data []byte) (int, error) {
-	n := len(data)
-	remaining := identifyUSBOutputLimit - b.Len()
-	if len(data) > remaining {
-		data = data[:remaining]
-		b.truncated = true
-	}
-	_, _ = b.Buffer.Write(data)
-	return n, nil
-}
-
 func readIdentifyUSB(port string) identifyUSBInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	// -l includes serial-child properties as well as USB-device properties.
 	// Starting at USB roots avoids collecting unrelated host registry state.
 	command := exec.CommandContext(ctx, "/usr/sbin/ioreg", "-a", "-l", "-p", "IOService", "-r", "-c", "IOUSBHostDevice")
-	var output identifyUSBOutput
+	output := cappedBuffer{limit: identifyUSBOutputLimit}
 	command.Stdout = &output
 	command.Stderr = io.Discard
 	command.WaitDelay = 250 * time.Millisecond
