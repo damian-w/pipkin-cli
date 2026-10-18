@@ -188,7 +188,7 @@ func TestFlashFirstInstallAndUpdate(t *testing.T) {
 			if strings.Contains(f.output.String(), "Confirm this is a CYD") == update || !strings.Contains(f.output.String(), "1.0.1 is running") {
 				t.Fatal(f.output.String())
 			}
-			if update && (!strings.Contains(f.output.String(), "Update your Pipkin display from 1.0.0 to 1.0.1?") || !strings.Contains(f.output.String(), "Update now?")) {
+			if update && (!strings.Contains(f.output.String(), "Ready to update your display from Pipkin 1.0.0 to 1.0.1.") || !strings.Contains(f.output.String(), "Update now?")) {
 				t.Fatal(f.output.String())
 			}
 			if strings.Contains(f.output.String(), "Finishing the firmware write") {
@@ -303,10 +303,10 @@ func TestFlashStoredPipkinFirmwarePreservesSettings(t *testing.T) {
 				t.Fatalf("stored firmware recovery: err=%v erases=%d starts=%d", err, f.tool.erases, f.starts)
 			}
 			if wantWrite {
-				if len(f.tool.writes) != 1 || len(f.tool.writes[0]) != 1 || f.tool.writes[0][0].Offset != 0x10000 || !strings.Contains(f.output.String(), "stored; not responding") {
+				if len(f.tool.writes) != 1 || len(f.tool.writes[0]) != 1 || f.tool.writes[0][0].Offset != 0x10000 || !strings.Contains(f.output.String(), "installed but not responding") {
 					t.Fatal("nonresponding kit was treated as a new board", f.output.String())
 				}
-				if options.Reinstall && !strings.Contains(f.output.String(), "Reinstall Pipkin 1.0.1") {
+				if options.Reinstall && !strings.Contains(f.output.String(), "reinstall Pipkin 1.0.1") {
 					t.Fatal("stored firmware reinstall was labelled as an update", f.output.String())
 				}
 			} else if len(f.tool.writes) != 0 {
@@ -365,7 +365,7 @@ func TestFlashFailureRestoresHelperAndReportsRecovery(t *testing.T) {
 			} else if f.starts != 1 {
 				t.Fatal("helper not restored on failure")
 			}
-			if len(f.tool.writes) != 0 && scenario != "restore" && !strings.Contains(err.Error(), "no automatic rollback") {
+			if len(f.tool.writes) != 0 && scenario != "restore" && !strings.Contains(err.Error(), "To fix it:") {
 				t.Fatal("write failure did not explain recovery", err)
 			}
 			if scenario == "restore" && strings.Contains(err.Error(), "To fix it:") {
@@ -392,11 +392,11 @@ func TestFlashCancellationRestoresStoppedHelper(t *testing.T) {
 
 func TestFlashConfirmationBoundaries(t *testing.T) {
 	for _, answer := range []string{"y\n", "YES\r\n", "  yes \n"} {
-		if yes, err := confirmFlash(context.Background(), strings.NewReader(answer), io.Discard); !yes || err != nil {
+		if yes, err := confirmFlashPrompt(context.Background(), strings.NewReader(answer), io.Discard, "? "); !yes || err != nil {
 			t.Fatal(answer, yes, err)
 		}
 	}
-	if yes, err := confirmFlash(context.Background(), strings.NewReader(strings.Repeat("y", 1024)+"\n"), io.Discard); yes || err == nil {
+	if yes, err := confirmFlashPrompt(context.Background(), strings.NewReader(strings.Repeat("y", 1024)+"\n"), io.Discard, "? "); yes || err == nil {
 		t.Fatal("overlong answer accepted")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -404,7 +404,7 @@ func TestFlashConfirmationBoundaries(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 	cancel()
-	if yes, err := confirmFlash(ctx, reader, io.Discard); yes || !errors.Is(err, context.Canceled) {
+	if yes, err := confirmFlashPrompt(ctx, reader, io.Discard, "? "); yes || !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled confirmation accepted", yes, err)
 	}
 }

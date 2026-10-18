@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -19,16 +20,14 @@ const (
 	taskPollEvery        = 30 * time.Second
 )
 
-// Task contains only local status metadata. UpdatedAt is source time in Unix
-// seconds when available, and is not a heartbeat or a guaranteed transition time.
+// Task holds only status metadata. UpdatedAt is the source's time, not a heartbeat.
 type Task struct {
 	ID        string `json:"id"`
 	UpdatedAt *int64 `json:"updated_at"`
 	Status    string `json:"status"`
 }
 
-// Coverage describes collection, not whether the provider has work underway.
-// No supported source currently establishes complete coverage.
+// Coverage is partial, unavailable or unsupported; no source is ever complete.
 type TaskProvider struct {
 	Coverage string `json:"coverage"`
 	Tasks    []Task `json:"tasks"`
@@ -41,14 +40,10 @@ type TaskSnapshot struct {
 }
 
 const tasksHelp = `
-Reads existing local Claude Code and Codex GUI state on macOS and Windows.
-No separate provider CLI, sign-in, hook or setup is needed.
+Reads tasks from the Claude and Codex desktop apps on macOS and Windows.
+Pipkin may not see every task.
 
-  --json  Print task IDs, source update times, statuses and collection coverage
-
-Coverage is partial. Observed tasks cannot establish complete counts, and missing
-data does not mean zero tasks. Unavailable collections have tasks: null.
-Task detection does not contact providers, change chats or update the display.
+  --json  Print each task's status as JSON
 `
 
 func taskOpaqueID(provider, rawID string) string {
@@ -93,7 +88,7 @@ func collectTasksWith(ctx context.Context, now func() time.Time, collectors task
 	return snapshot
 }
 
-// Invalid or absent observations cannot become an authoritative empty list.
+// normalizeTaskProvider never turns missing data into an empty list.
 func normalizeTaskProvider(p TaskProvider) TaskProvider {
 	if p.Coverage != "partial" {
 		if p.Coverage != "unsupported" {
@@ -156,33 +151,34 @@ func runTasks(ctx context.Context, jsonOutput bool, out io.Writer, collect func(
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(snapshot)
 	}
-	for _, provider := range []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude Code"}} {
-		p, ok := snapshot.Providers[provider.key]
-		if !ok || p.Coverage != "partial" || len(p.Tasks) == 0 {
-			state := "unavailable"
-			if p.Coverage == "unsupported" {
-				state = "unsupported on this system"
+	for _, provider := range taskProviders {
+		summary := taskSummary(snapshot.Providers[provider.key])
+		if summary == "" {
+			summary = "None found"
+			if snapshot.Providers[provider.key].Coverage == "unsupported" {
+				summary = "Not available on this system"
 			}
-			if _, err := fmt.Fprintf(out, "%s: task data %s; counts unknown\n", provider.name, state); err != nil {
-				return err
-			}
-			continue
 		}
-		if _, err := fmt.Fprintf(out, "%s (partial coverage):\n", provider.name); err != nil {
+		if err := writeOutputLine(out, "", fmt.Sprintf("%-11s  %s", provider.name, summary)); err != nil {
 			return err
 		}
-		counts := map[string]int{}
-		for _, task := range p.Tasks {
-			counts[task.Status]++
-		}
-		for _, state := range []struct{ key, label string }{{"working", "Working"}, {"needs_attention", "Need attention"}, {"blocked", "Blocked"}, {"idle", "Idle"}, {"unknown", "Unknown state"}} {
-			if count := counts[state.key]; count > 0 {
-				if _, err := fmt.Fprintf(out, "  %s: %d observed\n", state.label, count); err != nil {
-					return err
-				}
-			}
+	}
+	return nil
+}
+
+var taskProviders = []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude Code"}}
+
+// taskSummary counts a provider's tasks by status, or returns "" when none were seen.
+func taskSummary(p TaskProvider) string {
+	counts := map[string]int{}
+	for _, task := range normalizeTaskProvider(p).Tasks {
+		counts[task.Status]++
+	}
+	var parts []string
+	for _, state := range []struct{ key, label string }{{"working", "working"}, {"needs_attention", "waiting for you"}, {"blocked", "blocked"}, {"idle", "idle"}, {"unknown", "status unknown"}} {
+		if count := counts[state.key]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count, state.label))
 		}
 	}
-	_, err := fmt.Fprintln(out, "Observed tasks only; complete counts are unknown.")
-	return err
+	return strings.Join(parts, ", ")
 }

@@ -21,7 +21,7 @@ func TestAuthorizeOnlyExplainsPromptWhenDesktopNeedsIt(t *testing.T) {
 		if err := runAuthorize(context.Background(), "darwin", false, &out, deps); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(out.String(), "Mac login password") != prompt || !strings.Contains(out.String(), "sign-in is ready") || strings.Contains(out.String(), "No Claude login") {
+		if strings.Contains(out.String(), "Mac login password") != prompt || !strings.Contains(out.String(), "can now read Claude") || strings.Contains(out.String(), "No Claude login") {
 			t.Fatalf("misleading authorization output: %s", out.String())
 		}
 	}

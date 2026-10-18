@@ -49,9 +49,8 @@ itself each time you sign in to your computer.
 
 On a Mac, you may see a Keychain prompt asking about Claude's saved sign-in.
 Enter your Mac login password and choose **Always Allow** so Pipkin can keep
-reading it in the background. If you
-clicked something else, the [sign-in guide](docs/data-sources.md#existing-sign-ins)
-explains how to fix it.
+reading it in the background. If you clicked something else, the
+[sign-in guide](docs/data-sources.md#existing-sign-ins) explains how to fix it.
 
 ## What the display shows
 
@@ -73,30 +72,19 @@ installing so it can find `pipkin`.
 
 | Command | What it does |
 | --- | --- |
-| `pipkin status` | Checks that Pipkin is running and the display is connected |
+| `pipkin status` | Checks Pipkin, your display and your allowance |
 | `pipkin usage` | Shows your Claude and Codex allowance right now |
 | `pipkin restart` | Restarts Pipkin if the display stops updating |
 | `pipkin update` | Updates Pipkin to the latest version |
 | `pipkin flash` | Installs or updates the display's firmware |
 | `pipkin uninstall` | Removes Pipkin from your computer |
 
-Run `pipkin` for a short status view, or `pipkin help` for the command menu.
-`pipkin status` reads saved allowance, local task summaries and display state
-without contacting the providers; `pipkin usage` fetches current allowance and
-adds model limits, credits, extra usage and banked resets when available.
+Run `pipkin` on its own for a quick status check, or `pipkin help` to see every
+command. On Mac and Windows, `pipkin status` also shows what your Claude Code
+and Codex tasks are doing: working, waiting for you or idle.
 
-Run `pipkin help <command>` for options and details. Other commands appear under
-"More" in `pipkin help`; `pipkin tasks` shows observed local Claude Code and Codex
-GUI tasks on Mac and Windows. Task coverage is partial, so observed tasks do not
-establish complete counts. Task detection needs no extra installation or sign-in.
-
-On a Mac or Linux, the installer prints a full-path command you can use straight
-away and a copy-paste PATH fix when needed. It does not edit shell startup files
-automatically. If the terminal says `pipkin: command not found`, use
-`~/.local/bin/pipkin` or the command shown by the installer.
-
-`pipkin update` updates the computer app. It can also point out newer display
-firmware using the saved display version; it never flashes the display itself.
+On a Mac or Linux, if the terminal says `pipkin: command not found`, use the
+command the installer printed, or `~/.local/bin/pipkin`.
 
 ## Updating your display
 
@@ -107,20 +95,20 @@ pipkin flash
 ```
 
 Pipkin downloads the latest firmware, shows you what it's about to do, and only
-goes ahead once you say yes. Updates keep your display's settings. The same
-command sets up a display you've built yourself. The [firmware guide](docs/firmware.md)
+goes ahead once you say yes. Updates keep your display's settings, and
+`pipkin update` tells you when new firmware is out. The same command sets up a
+display you've built yourself. The [firmware guide](docs/firmware.md)
 covers supported boards and troubleshooting.
 
 ## Privacy
 
 Your sign-ins stay on your computer. Pipkin sends them only to Anthropic or
-OpenAI, to read your usage. While awake, Pipkin also checks local task state about
-every 30 seconds. Local task detection reads GUI status metadata; Codex
-can include conversation content in its local snapshots, which Pipkin processes
-in memory and discards. Conversation text is never saved or uploaded. There's no
-telemetry or Pipkin account, and no Pipkin server ever sees your usage. Apart
-from that, it only contacts GitHub to download updates, firmware and the tool that
-installs firmware. The [data sources guide](docs/data-sources.md) has the details.
+OpenAI, to read your usage. To show your tasks, Pipkin reads their status from
+the Claude and Codex apps on your computer. Any conversation text it passes
+through is discarded, never saved or sent. There's no telemetry or Pipkin
+account, and no Pipkin server ever sees your usage. Apart from that, it only
+contacts GitHub to download updates, firmware and the tool that installs
+firmware. The [data sources guide](docs/data-sources.md) has the details.
 
 ## For developers
 

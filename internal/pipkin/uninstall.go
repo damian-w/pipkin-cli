@@ -17,9 +17,8 @@ type removalTarget struct {
 	home, work string
 }
 
-// Uninstall must verify the directory before touching the helper, startup
-// entries or command launcher. A resolved relative override is not consent to
-// recursively remove the current directory.
+// Uninstall verifies the folder before touching the helper, startup entry or
+// launcher. A relative override never resolves to the current folder.
 func installationRemovalTarget() (removalTarget, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -35,38 +34,42 @@ func installationRemovalTarget() (removalTarget, error) {
 func inspectRemovalTarget(dir, home, work string) (removalTarget, error) {
 	var target removalTarget
 	if !filepath.IsAbs(dir) {
-		return target, errors.New("Uninstall requires an absolute Pipkin folder. Unset a relative PIPKIN_HOME override and try again.")
+		return target, fmt.Errorf("Pipkin's folder must be a full path, not %s.", terminalText(dir))
 	}
 	dir = filepath.Clean(dir)
 	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		// Already deleted: still remove automatic startup and the command.
+		return removalTarget{dir: dir, home: home, work: work}, nil
+	}
 	if err != nil {
-		return target, fmt.Errorf("Couldn't verify the Pipkin folder for uninstall: %w", err)
+		return target, fmt.Errorf("Couldn't check Pipkin's folder: %w", err)
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return target, errors.New("Uninstall requires a real Pipkin folder, not a file or directory link.")
+		return target, fmt.Errorf("%s is a file or link, not Pipkin's folder. Check PIPKIN_HOME.", terminalText(dir))
 	}
 	canonical, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return target, err
 	}
 	if filepath.Dir(canonical) == canonical {
-		return target, errors.New("Refusing to uninstall from a filesystem root.")
+		return target, errors.New("Pipkin's folder can't be a filesystem root. Check PIPKIN_HOME.")
 	}
 	for _, protected := range []string{home, work} {
 		if !filepath.IsAbs(protected) {
-			return target, errors.New("Couldn't verify protected folders for uninstall.")
+			return target, errors.New("Couldn't check your home and current folders.")
 		}
 		resolved, err := filepath.EvalSymlinks(protected)
 		if err != nil {
-			return target, fmt.Errorf("Couldn't verify protected folders for uninstall: %w", err)
+			return target, fmt.Errorf("Couldn't check your home and current folders: %w", err)
 		}
 		for {
 			ancestor, err := os.Stat(resolved)
 			if err != nil {
-				return target, fmt.Errorf("Couldn't verify protected folders for uninstall: %w", err)
+				return target, fmt.Errorf("Couldn't check your home and current folders: %w", err)
 			}
 			if os.SameFile(info, ancestor) {
-				return target, errors.New("Refusing to remove your home folder, current folder or one of their parents. Run uninstall from outside Pipkin's folder and check PIPKIN_HOME.")
+				return target, errors.New("Pipkin's folder can't be your home or current folder, or contain them. Run uninstall from another folder and check PIPKIN_HOME.")
 			}
 			parent := filepath.Dir(resolved)
 			if parent == resolved {
@@ -75,19 +78,20 @@ func inspectRemovalTarget(dir, home, work string) (removalTarget, error) {
 			resolved = parent
 		}
 	}
-	if err := validateRemovalContents(canonical); err != nil {
+	if err := validateRemovalContents(canonical, dir); err != nil {
 		return target, err
 	}
 	return removalTarget{dir: canonical, info: info, home: home, work: work}, nil
 }
 
-func validateRemovalContents(dir string) error {
+func validateRemovalContents(dir, shown string) error {
 	for _, marker := range []string{"config.json", filepath.Join("bin", executableName("pipkin"))} {
 		info, err := os.Lstat(filepath.Join(dir, marker))
 		if err != nil || !info.Mode().IsRegular() {
-			return errors.New("This folder is not a verified Pipkin installation. Uninstall requires config.json and the installed Pipkin app; check PIPKIN_HOME.")
+			return fmt.Errorf("%s doesn't look like Pipkin's folder, so it wasn't removed. Check PIPKIN_HOME.", terminalText(shown))
 		}
 	}
+	unexpected := fmt.Errorf("%s has files or links Pipkin didn't create. Move them elsewhere, then try again.", terminalText(shown))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -100,7 +104,7 @@ func validateRemovalContents(dir string) error {
 			strings.HasPrefix(name, "config.json.backup-") || strings.HasPrefix(name, ".pipkin-")
 		info, err := entry.Info()
 		if err != nil || directory && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) || !directory && (!file || !info.Mode().IsRegular()) {
-			return errors.New("The Pipkin folder contains unrecognized files or links. Move those files elsewhere before uninstalling; nothing was removed.")
+			return unexpected
 		}
 	}
 	entries, err = os.ReadDir(filepath.Join(dir, "bin"))
@@ -116,11 +120,10 @@ func validateRemovalContents(dir string) error {
 		info, err := entry.Info()
 		staging := strings.HasPrefix(name, ".pipkin-stage-")
 		if err != nil || staging && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) || !staging && (!known || !info.Mode().IsRegular()) {
-			return errors.New("Pipkin's bin folder contains unrecognized files or links. Move those files elsewhere before uninstalling; nothing was removed.")
+			return unexpected
 		}
 	}
-	// In particular, delayed cleanup must never recurse through a junction or
-	// link in a cache. WalkDir inspects links themselves instead of following.
+	// Delayed cleanup must never recurse through a link or junction.
 	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -130,7 +133,7 @@ func validateRemovalContents(dir string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() && !info.Mode().IsRegular() {
-			return errors.New("The Pipkin folder contains a link or special file. Move it elsewhere before uninstalling; nothing was removed.")
+			return unexpected
 		}
 		return nil
 	})
@@ -141,14 +144,14 @@ func (target removalTarget) recheck() error {
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(target.info, current.info) {
-		return errors.New("The Pipkin folder changed during uninstall. Nothing was deleted; try again.")
+	if (target.info != nil || current.info != nil) && !os.SameFile(target.info, current.info) {
+		return errors.New("Pipkin's folder changed during uninstall. Try again.")
 	}
 	return nil
 }
 
 func stageVerifiedInstallationRemoval(target removalTarget) (string, error) {
-	if err := target.recheck(); err != nil {
+	if err := target.recheck(); err != nil || target.info == nil {
 		return "", err
 	}
 	tombstone, err := stageInstallationRemoval(target.dir)
@@ -157,20 +160,19 @@ func stageVerifiedInstallationRemoval(target removalTarget) (string, error) {
 	}
 	info, checkErr := os.Lstat(tombstone)
 	if checkErr == nil && !os.SameFile(target.info, info) {
-		checkErr = errors.New("the Pipkin folder changed during uninstall")
+		checkErr = errors.New("Pipkin's folder changed during uninstall.")
 	}
 	if checkErr == nil {
-		checkErr = validateRemovalContents(tombstone)
+		checkErr = validateRemovalContents(tombstone, target.dir)
 	}
 	if checkErr != nil {
-		// Keep an unexpected directory intact, including if another installation
-		// appeared at the original path while this one was being staged.
+		// Keep an unexpected folder, and any new installation at the old path.
 		if _, err := os.Lstat(target.dir); errors.Is(err, os.ErrNotExist) {
 			if restoreErr := os.Rename(tombstone, target.dir); restoreErr == nil {
 				return "", checkErr
 			}
 		}
-		return "", fmt.Errorf("%w; files were retained at %s", checkErr, terminalText(tombstone))
+		return "", fmt.Errorf("%w Its files were kept at %s.", checkErr, terminalText(tombstone))
 	}
 	return tombstone, nil
 }
@@ -202,10 +204,10 @@ func runUninstallCommand(out io.Writer, deps uninstallDependencies) error {
 		}
 	}
 	if err := deps.remove(target); err != nil {
-		return err
+		return fmt.Errorf("Pipkin was stopped and removed from startup, but its folder was kept. %w", err)
 	}
 	if deps.goos == "windows" {
-		return writeOutputLine(out, "", "Pipkin removal is scheduled after this command exits.")
+		return writeOutputLine(out, "", "Pipkin was removed. Its folder is deleted when this command exits.")
 	}
 	return writeOutputLine(out, "", "Pipkin was removed.")
 }

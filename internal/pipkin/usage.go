@@ -123,10 +123,6 @@ func (s Status) providerError(provider string) string {
 	return ""
 }
 
-func usageCommand(args []string) error {
-	return usageCommandTo(args, os.Stdout, os.Stderr)
-}
-
 func usageCommandTo(args []string, out, progress io.Writer) error {
 	return runUsage(context.Background(), len(args) == 1, out, progress, usageDependencies{
 		now: time.Now, config: initializedConfig, collect: collectProvider,
@@ -134,18 +130,10 @@ func usageCommandTo(args []string, out, progress io.Writer) error {
 	})
 }
 
-func printJSON(value any) error {
-	return printJSONTo(os.Stdout, value)
-}
-
 func printJSONTo(out io.Writer, value any) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
-}
-
-func statusJSONCommand() error {
-	return statusJSONTo(os.Stdout)
 }
 
 func statusJSONTo(out io.Writer) error {

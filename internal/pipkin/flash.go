@@ -55,18 +55,6 @@ func parseOptions(name string, args []string, define func(*flag.FlagSet), valued
 	if err := flags.Parse(args); err != nil {
 		return errors.New(terminalText(strings.ReplaceAll(err.Error(), "flag -", "option --")))
 	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("%s takes options only", name)
-	}
-	var empty string
-	flags.Visit(func(option *flag.Flag) {
-		if slices.Contains(valued, option.Name) && option.Value.String() == "" {
-			empty = option.Name
-		}
-	})
-	if empty != "" {
-		return fmt.Errorf("--%s requires a value", empty)
-	}
 	return nil
 }
 
@@ -148,7 +136,7 @@ type boardSession struct {
 	restoreHelper             bool
 }
 
-func openBoardSession(actions boardActions, purpose string) (*boardSession, error) {
+func openBoardSession(actions boardActions) (*boardSession, error) {
 	installation, err := acquireFileLock(installationLockPath())
 	if err != nil {
 		return nil, commandLockError("use", err)
@@ -194,7 +182,7 @@ func (s *boardSession) close(result *error) {
 	}
 	if s.restoreHelper {
 		if err := s.start(); err != nil {
-			*result = errors.Join(*result, fmt.Errorf("could not resume the helper; run pipkin start: %w", err))
+			*result = errors.Join(*result, fmt.Errorf("couldn't restart Pipkin; run 'pipkin start': %w", err))
 		}
 	}
 	s.installation.Close()
@@ -206,7 +194,7 @@ func flashCommand(args []string) error {
 		return err
 	}
 	if !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsCygwinTerminal(os.Stdin.Fd()) {
-		return errors.New("flash requires an interactive terminal for confirmation; run pipkin flash in a terminal")
+		return errors.New("flash needs a terminal to ask for confirmation; run 'pipkin flash' in a terminal window")
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -228,7 +216,7 @@ func selectFlashPort(explicit string, candidates []string) (string, error) {
 	}
 	switch len(candidates) {
 	case 0:
-		return "", errors.New("no USB serial board found; connect the CYD with a data cable, or use --port PORT")
+		return "", errors.New("no display found; connect it with a USB data cable, or choose a port with --port PORT")
 	case 1:
 		return candidates[0], nil
 	default:
@@ -271,7 +259,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	var session *boardSession
 	var selectedVersion string
 	var finishNotice func()
-	writeStarted, firmwareRunning := false, false
+	writeStarted, written, firmwareRunning := false, false, false
 	defer func() {
 		cancelledBeforeWrite := !writeStarted && ctx.Err() != nil && errors.Is(result, ctx.Err())
 		if cancelledBeforeWrite {
@@ -290,14 +278,15 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 			result = errors.Join(result, outputErr)
 		}
 		if result != nil && writeStarted && !firmwareRunning {
-			result = &flashWriteFailure{cause: result, port: session.port, version: selectedVersion}
+			result = &flashWriteFailure{cause: result, written: written,
+				command: commandHint("flash", "--port", session.port, "--version", selectedVersion, "--reinstall")}
 		}
 	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	var err error
-	session, err = openBoardSession(actions.boardActions, "flashing")
+	session, err = openBoardSession(actions.boardActions)
 	if err != nil {
 		return err
 	}
@@ -348,15 +337,15 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		if installed == release.Manifest.Version && !options.Reinstall {
 			err := writeOutputLine(output, "", "Pipkin firmware "+release.Manifest.Version+" is up to date. Use --reinstall to flash it again.")
 			if err == nil && options.Board != "" {
-				err = writeOutputLine(output, "", "To remember the physical board without flashing, run 'pipkin identify --board "+options.Board+"'.")
+				err = writeOutputLine(output, "", "To save the board type without flashing, run 'pipkin identify --board "+options.Board+"'.")
 			}
 			return err
 		}
 		if newerStableFirmware(identity["firmware"], release.Manifest.Version) && options.Version == "" {
-			return fmt.Errorf("the display has newer firmware than the latest published release; use --version %s to explicitly select a downgrade", release.Manifest.Version)
+			return fmt.Errorf("your display has newer firmware than the latest release; to downgrade, run 'pipkin flash --version %s'", release.Manifest.Version)
 		}
 	}
-	if err := writeOutputLine(output, "", "Checking your display. Its screen may go blank until this finishes."); err != nil {
+	if err := writeOutputLine(output, "", "Checking your display. The screen may go blank for a moment."); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -420,10 +409,10 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 			stored = true
 			installed = strings.TrimPrefix(storedVersion, "v")
 			if installed == release.Manifest.Version && !options.Reinstall {
-				return fmt.Errorf("Pipkin firmware %s is installed but did not respond; use --reinstall to repair it", storedVersion)
+				return fmt.Errorf("Pipkin firmware %s is installed but not responding; run 'pipkin flash --reinstall' to repair it", storedVersion)
 			}
 			if newerStableFirmware(storedVersion, release.Manifest.Version) && options.Version == "" {
-				return fmt.Errorf("stored Pipkin firmware is newer than the latest published release; use --version %s to explicitly select a downgrade", release.Manifest.Version)
+				return fmt.Errorf("your display has newer firmware than the latest release; to downgrade, run 'pipkin flash --version %s'", release.Manifest.Version)
 			}
 		}
 	}
@@ -492,9 +481,8 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := writeOutputLine(output, "", "This takes about a minute. Keep the USB cable plugged in until it finishes."); err != nil {
 		return err
 	}
-	// This final check is the commit point. Cancellation before it cannot start
-	// an erase or write. After it, finish verification, restart and boot checks
-	// while the flashing tool keeps its own per-operation deadlines.
+	// Last chance to cancel. After this, the write, verification and boot check
+	// finish under the flashing tool's own timeouts.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -509,6 +497,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := tool.Write(writeCtx, port, images); err != nil {
 		return fmt.Errorf("firmware write or verification failed: %w", err)
 	}
+	written = true
 	if err := tool.Reset(writeCtx, port); err != nil {
 		return fmt.Errorf("firmware written, but board restart failed: %w", err)
 	}
@@ -525,8 +514,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	return writeOutputLine(output, "", "Pipkin firmware "+release.Manifest.Version+" is running.")
 }
 
-// Cancellation itself is calm, but a joined process or cleanup failure must
-// remain visible. Unwrap mixed cancellation trees and keep every other branch.
+// flashCancellationRemainder drops the cancellation but keeps other failures.
 func flashCancellationRemainder(err, cancelled error) error {
 	if err == nil || !errors.Is(err, cancelled) {
 		return err
@@ -545,10 +533,6 @@ func flashCancellationRemainder(err, cancelled error) error {
 	default:
 		return nil
 	}
-}
-
-func confirmFlash(ctx context.Context, input io.Reader, output io.Writer) (bool, error) {
-	return confirmFlashPrompt(ctx, input, output, "Confirm this is a CYD and flash? [y/N] ")
 }
 
 func confirmFlashPrompt(ctx context.Context, input io.Reader, output io.Writer, prompt string) (confirmed bool, result error) {

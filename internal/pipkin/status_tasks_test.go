@@ -23,7 +23,7 @@ func TestStatusSummarizesFreshDeduplicatedTasksWithoutChangingJSON(t *testing.T)
 	if err := writeStatus(&out, view, testNow, "darwin"); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Local tasks (observed; complete counts unknown)", "1 working, 1 need attention, 1 blocked (partial)", "1 idle, 1 unknown state (partial)", "pipkin tasks"} {
+	for _, want := range []string{"\nTasks\n", "Codex        1 working, 1 waiting for you, 1 blocked\n", "Claude Code  1 idle, 1 status unknown\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing task summary %q: %s", want, out.String())
 		}
@@ -56,6 +56,7 @@ func TestStatusTasksDoNotReviveStaleStoppedStartingOrUnsupportedData(t *testing.
 				view.snapshot.Tasks = nil
 			case "unsupported":
 				goos = "linux"
+				tasks.Providers["codex"] = TaskProvider{Coverage: "unsupported"}
 			case "invalid schema":
 				tasks.SchemaVersion = 99
 			}
@@ -63,18 +64,16 @@ func TestStatusTasksDoNotReviveStaleStoppedStartingOrUnsupportedData(t *testing.
 			if err := writeStatus(&out, view, testNow, goos); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out.String(), "counts unknown") || strings.Contains(out.String(), "1 working") || strings.Contains(out.String(), "private") {
+			if strings.Contains(out.String(), "Tasks") || strings.Contains(out.String(), "working") {
 				t.Fatalf("unknown tasks looked current: %s", out.String())
-			}
-			if kind == "unsupported" && (!strings.Contains(out.String(), "Unsupported") || strings.Contains(out.String(), "pipkin tasks")) {
-				t.Fatal("unsupported platform offered an ineffective fresh check")
 			}
 		})
 	}
 }
 
 func TestStatusTaskSummaryPropagatesWriterFailures(t *testing.T) {
-	if err := writeTaskStatusSummary(failingCLIWriter{}, nil, true, testNow, "windows"); !errors.Is(err, io.ErrClosedPipe) {
+	tasks := &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{"codex": {Coverage: "partial", Tasks: []Task{{ID: "one", Status: "idle"}}}}}
+	if err := writeTaskStatusSummary(failingCLIWriter{}, tasks, testNow); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal("summary hid writer failure")
 	}
 }

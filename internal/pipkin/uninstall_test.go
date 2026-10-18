@@ -278,3 +278,22 @@ func TestUninstallFlowOrdersActionsAndStopsOnFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestUninstallWithoutFolderStillRemovesStartupAndLauncher(t *testing.T) {
+	dir, home, work := removalTestInstallation(t)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	action := func(name string) func() error { return func() error { calls = append(calls, name); return nil } }
+	deps := uninstallDependencies{goos: "darwin", target: func() (removalTarget, error) { return inspectRemovalTarget(dir, home, work) },
+		lock: func() (io.Closer, error) { return removalTestCloser{close: func() {}}, nil },
+		stop: action("stop"), startup: action("startup"), launcher: action("launcher"), remove: removeInstallation}
+	var out bytes.Buffer
+	if err := runUninstallCommand(&out, deps); err != nil || !reflect.DeepEqual(calls, []string{"stop", "startup", "launcher"}) {
+		t.Fatalf("missing folder blocked cleanup: %v %v", err, calls)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("uninstall recreated the missing folder")
+	}
+}

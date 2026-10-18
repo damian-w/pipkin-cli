@@ -17,7 +17,7 @@ type statusView struct {
 	snapshot  Status
 }
 
-// Inspect an existing lock without creating files or changing lifecycle rules.
+// statusRunningPID checks the helper lock without creating files.
 func statusRunningPID() (int, error) {
 	file, err := os.OpenFile(lockPath(), os.O_RDWR, 0)
 	if errors.Is(err, os.ErrNotExist) {
@@ -81,7 +81,7 @@ func loadStatusView() (statusView, error) {
 		return view, fmt.Errorf("could not read Pipkin's saved status: %w", err)
 	}
 	if view.snapshot.SchemaVersion != 1 || view.snapshot.PID <= 0 {
-		return view, errors.New("Pipkin's saved status is incomplete or uses an unsupported format")
+		return view, errors.New("Pipkin's saved status can't be read. Run 'pipkin restart'.")
 	}
 	if view.snapshot.PID != view.pid {
 		view.starting = true
@@ -103,15 +103,9 @@ func statusCommandTo(args []string, out io.Writer) error {
 func writeStatus(out io.Writer, view statusView, now int64, goos string) error {
 	switch {
 	case view.starting:
-		if err := writeOutputLine(out, "", "Pipkin is starting up. Run 'pipkin status' again in a few seconds."); err != nil {
-			return err
-		}
-		return writeTaskStatusSummary(out, nil, false, now, goos)
+		return writeOutputLine(out, "", "Pipkin is starting up. Run 'pipkin status' again in a few seconds.")
 	case view.pid == 0 && view.installed:
-		if err := writeOutputLine(out, "", "Pipkin is stopped, so your display isn't updating. Run 'pipkin start'."); err != nil {
-			return err
-		}
-		return writeTaskStatusSummary(out, view.snapshot.Tasks, false, now, goos)
+		return writeOutputLine(out, "", "Pipkin is stopped, so your display isn't updating. Run 'pipkin start'.")
 	case view.pid == 0:
 		return writeOutputLine(out, "", "Pipkin isn't installed. Run 'pipkin install' to set it up.")
 	}
@@ -138,53 +132,38 @@ func writeStatus(out io.Writer, view statusView, now int64, goos string) error {
 	if err := writeProviders(out, view.snapshot, now, false); err != nil {
 		return err
 	}
-	return writeTaskStatusSummary(out, view.snapshot.Tasks, true, now, goos)
+	return writeTaskStatusSummary(out, view.snapshot.Tasks, now)
 }
 
-func writeTaskStatusSummary(out io.Writer, saved *TaskSnapshot, running bool, now int64, goos string) error {
-	if err := writeOutputLine(out, "", ""); err != nil {
-		return err
+func writeTaskStatusSummary(out io.Writer, saved *TaskSnapshot, now int64) error {
+	snapshot := readableTaskSnapshot(saved, true, time.Unix(now, 0))
+	if snapshot == nil || snapshot.SchemaVersion != 1 {
+		return nil
 	}
-	if err := writeOutputLine(out, "", "Local tasks (observed; complete counts unknown)"); err != nil {
-		return err
-	}
-	snapshot := readableTaskSnapshot(saved, running, time.Unix(now, 0))
-	for _, provider := range []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude Code"}} {
-		value := TaskProvider{Coverage: "unavailable"}
-		if goos != "darwin" && goos != "windows" {
-			value.Coverage = "unsupported"
-		} else if snapshot != nil && snapshot.SchemaVersion == 1 {
-			value = normalizeTaskProvider(snapshot.Providers[provider.key])
+	heading := false
+	for _, provider := range taskProviders {
+		summary := taskSummary(snapshot.Providers[provider.key])
+		if summary == "" {
+			continue
 		}
-		message := "Unavailable; counts unknown"
-		if value.Coverage == "unsupported" {
-			message = "Unsupported on this system; counts unknown"
-		} else if value.Coverage == "partial" {
-			counts := map[string]int{}
-			for _, task := range value.Tasks {
-				counts[task.Status]++
+		if !heading {
+			if err := writeOutputLine(out, "", ""); err != nil {
+				return err
 			}
-			var parts []string
-			for _, state := range []struct{ key, label string }{{"working", "working"}, {"needs_attention", "need attention"}, {"blocked", "blocked"}, {"idle", "idle"}, {"unknown", "unknown state"}} {
-				if count := counts[state.key]; count > 0 {
-					parts = append(parts, fmt.Sprintf("%d %s", count, state.label))
-				}
+			if err := writeOutputLine(out, "", "Tasks"); err != nil {
+				return err
 			}
-			message = strings.Join(parts, ", ") + " (partial)"
+			heading = true
 		}
-		if err := writeOutputLine(out, "  ", fmt.Sprintf("%-11s  %s", provider.name, message)); err != nil {
+		if err := writeOutputLine(out, "  ", fmt.Sprintf("%-11s  %s", provider.name, summary)); err != nil {
 			return err
 		}
-	}
-	if goos == "darwin" || goos == "windows" {
-		return writeOutputLine(out, "  ", "Run 'pipkin tasks' for a fresh local check.")
 	}
 	return nil
 }
 
 func writeDisplayHint(out io.Writer, reason, goos string) error {
-	// Existing snapshots contain only an error string. Recognize established OS
-	// messages conservatively; an unfamiliar error keeps its original detail.
+	// Snapshots keep only the error text, so match known OS messages.
 	detail := reason
 	if index := strings.LastIndex(detail, ": "); index >= 0 {
 		detail = detail[index+2:]
@@ -200,16 +179,16 @@ func writeDisplayHint(out io.Writer, reason, goos string) error {
 	}
 	switch {
 	case busy:
-		return writeOutputLine(out, "  ", "Another app may be using the port. Close any serial monitor or flashing tool; Pipkin will retry automatically.")
+		return writeOutputLine(out, "  ", "Another app may be using the display's port, such as a serial monitor. Close it and Pipkin will retry.")
 	case permission:
-		if err := writeOutputLine(out, "  ", "Pipkin couldn't access the serial port. Check its permissions."); err != nil {
+		if err := writeOutputLine(out, "  ", "Pipkin couldn't open the display's port. Check its permissions."); err != nil {
 			return err
 		}
-		if goos == "linux" {
-			return writeOutputLine(out, "  ", serialPermissionHint())
+		if hint := serialPermissionHint(); hint != "" {
+			return writeOutputLine(out, "  ", hint)
 		}
 		return nil
 	default:
-		return writeOutputLine(out, "  ", "Connect the display with a USB data cable. For a self-built display without Pipkin firmware, run 'pipkin flash'.")
+		return writeOutputLine(out, "  ", "Plug in the display with a USB data cable. For a new self-built display, run 'pipkin flash'.")
 	}
 }

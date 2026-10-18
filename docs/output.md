@@ -2,9 +2,9 @@
 
 Use `pipkin usage --json` for a fresh reading or `pipkin status --json` for the
 background helper's cached snapshot. Neither command needs a USB display.
-Use `pipkin tasks --json` for local GUI task observations on macOS and Windows.
-The schema is defined by [`Status`](../internal/pipkin/helper.go) and
-[`Reading`](../internal/pipkin/readings.go), with task observations defined by
+Use `pipkin tasks --json` for a fresh task check on macOS and Windows.
+The schema is defined by [`Status`](../internal/pipkin/helper.go),
+[`Reading`](../internal/pipkin/readings.go) and
 [`TaskSnapshot`](../internal/pipkin/tasks.go). Examples below use invented data.
 
 ## Commands and errors
@@ -13,14 +13,10 @@ The schema is defined by [`Status`](../internal/pipkin/helper.go) and
 | --- | --- |
 | `pipkin usage --json` | Collects both providers independently. Initializes local configuration if needed; does not update the helper's cache, retry schedule or display. |
 | `pipkin status --json` | Reads the saved snapshot and replaces `pid` with the current helper PID or zero. Does not contact providers or probe USB. |
-| `pipkin tasks --json` | Reads existing local GUI task state with a bounded collection budget. Does not contact provider servers, read credentials, start chats or require an installed/running Pipkin helper. |
+| `pipkin tasks --json` | Reads task status from the local desktop apps within five seconds. Does not contact providers, read sign-ins or need Pipkin installed, and does not update the cache. |
 | `pipkin usage` | Human-readable fresh usage and provider errors. |
-| `pipkin status` | Human-readable helper, display, cached allowance and local task summaries. Does not create settings or lock files. |
-| `pipkin tasks` | Human-readable observed task counts, with partial coverage or unknown counts stated explicitly. |
-
-Bare `pipkin` shows the short status view and a help hint when installed. It
-shows the command menu when the installation is absent or its location cannot be
-resolved. `pipkin help`, `-h` and `--help` always show the menu.
+| `pipkin status` | Human-readable helper, display, cached allowance and task counts. Does not create files. |
+| `pipkin tasks` | Human-readable task counts per app. |
 
 JSON commands write one indented object and a newline to stdout. Read the whole
 object after the command exits and keep stderr separate. Text output and object
@@ -36,28 +32,8 @@ key order are not interfaces.
 yet” and suggests `usage --json`. Provider errors alone do not change the exit
 status of `usage --json`.
 
-The text views use aligned provider rows. `status` shows Session and Weekly;
-`usage` adds reported plan slugs, model limits, credits, extra-usage spend and
-limits, and banked resets. Unknown amounts remain unknown; confirmed zero
-balances remain visible. A missing sign-in is a calm state, while expired or
-mismatched sign-ins include a next step. These presentation changes do not alter
-the JSON schema or which sources each command reads; error wording is not a
-stable interface.
-
-Reset countdowns omit zero units, for example `36m` or `7d`. Readings at least
-five minutes old show their age. Failed reads with retained quota are labelled
-"Last known reading"; expired resets say "awaiting refresh" without refilling the
-allowance. `usage` prints a one-line progress message only to an interactive
-stderr stream, and never in JSON mode.
-
-Text status distinguishes not installed, stopped and starting. A missing snapshot
-or one belonging to the previous helper can mean starting; malformed or unreadable
-state remains an error. Display diagnostics use saved connection information and
-do not probe USB. A saved port-open error describes the last connection attempt.
-The local task summary uses only fresh saved observations, deduplicates task IDs,
-and labels partial, unavailable or unsupported coverage. Stopped or starting
-helpers do not supply current counts. Run `pipkin tasks` for a fresh local check
-on macOS or Windows; the plain status view never opens a GUI connection.
+Text output is for people and can change between releases. `usage` prints a
+progress line to stderr only in an interactive terminal, never in JSON mode.
 
 ## Snapshot
 
@@ -75,7 +51,7 @@ version. Providers are keyed as `codex` and `claude` and can appear independentl
 | `readings` | Provider → reading, always | Fresh usage includes both providers, with placeholders on failure. Helper startup may have `{}` or only one provider. |
 | `codex_error`, `claude_error` | String; omitted when empty | Latest collection error. Wording is not a stable error code. |
 | `updated` | Unix seconds, always | Collection start time for fresh usage; last changed snapshot time for the helper. |
-| `tasks` | Task snapshot; omitted before the first local task scan and in fresh usage | Local GUI task observations, independent of subscription availability. See below. |
+| `tasks` | Task snapshot; omitted before the first check and in fresh usage | See [tasks](#tasks). Independent of allowance availability. |
 
 A connected `device` contains string fields `port` and `firmware`. A failed
 port-open attempt can supply `error`. `{}` means no recorded connection or error;
@@ -112,62 +88,56 @@ need not share an observation time.
 For a continuously visible UI, read cached status and update countdowns locally.
 Repeated `usage --json` calls make new requests without the helper's backoff.
 
-## Local GUI tasks
+## Tasks
 
-`pipkin tasks --json` returns one object with `schema_version: 1`, `observed_at`
-(Unix seconds), and a `providers` object keyed by `claude` and `codex`. Each
-provider has only `coverage` and `tasks`. Task records contain only:
+`pipkin tasks --json` returns `schema_version: 1`, `observed_at` (Unix seconds,
+when the check finished) and `providers`, keyed by `claude` and `codex`. Each
+provider has a `coverage` and a `tasks` list:
 
-| Field | Type / presence | Meaning |
-| --- | --- | --- |
-| `id` | String, always | Stable opaque provider-scoped task identity. Does not contain a title, path, prompt, PID or raw task ID. |
-| `updated_at` | Unix seconds or null, always | Native source update time where known. May reflect activity rather than the exact status transition; never use it as a heartbeat or failure timeout. |
-| `status` | String, always | `working`, `needs_attention`, `blocked`, `idle` or `unknown`. |
+| `coverage` | Meaning |
+| --- | --- |
+| `partial` | Tasks were seen. Others may have been missed. |
+| `unavailable` | Nothing usable was seen: the app may be closed, incompatible or slow to answer. `tasks` is `null`. |
+| `unsupported` | Task detection doesn't run on this system (Linux). `tasks` is `null`. |
 
-`coverage: "partial"` means these are observed tasks, not an exhaustive list.
-Observed counts can omit tasks. Missing statuses do not establish zero counts.
-`coverage: "unavailable"` means no usable
-observations were collected, including an absent/closed GUI, denied access,
-unsupported local storage/protocol, malformed state or an expired collection
-budget. It does not distinguish those causes or establish an absent task.
-`coverage: "unsupported"` applies to Linux task detection. Both unavailable and
-unsupported providers emit `tasks: null`; they never emit an authoritative empty
-list or synthetic zero counts.
+Each task has exactly these fields:
 
-Claude covers verified live local Code engines belonging to Claude Desktop.
-Its native latest-turn `blocked`/`need_input` summaries, after applying a current
-turn wrap-up's request for user input or clearing, mean human attention and map
-to `needs_attention`, even when the engine is idle. They are model-derived
-summaries, not proof of terminal failure. Ordinary Claude Chat and Cowork are
-outside this source's verified scope. A stopped engine is not a blocked task.
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable opaque ID, unique per provider. Contains no title, path or prompt. |
+| `updated_at` | The app's own update time in Unix seconds, or `null`. Not a heartbeat. |
+| `status` | `working`, `needs_attention`, `blocked`, `idle` or `unknown`. |
 
-Codex combines already-announced GUI streams with bounded existing-owner queries
-for recent persisted root candidates. Catalog history alone is not live state.
-Some background and ephemeral chats can be undiscovered, and unsupported or
-ambiguous state remains unknown. Structured unanswered native question cards
-can mean `needs_attention` even when runtime is idle and the turn is completed.
-Questions can remain pending across later turns. Accepted replies clear that
-signal; gaps in loaded history leave unresolved older questions unknown.
-Skip and dismissal state is held only in the GUI renderer and is not available
-through this source, so an unanswered dismissed card can still produce an
-attention signal. Unread completion alone does not imply attention, and a plan
-implementation offer is nonblocking.
-Known approval/input waits also mean `needs_attention`. Only an explicit fresh
-Codex runtime `systemError` means `blocked`; old failed turns, recoverable tool
-errors, blocked goals, cancellation, missing streams and silence do not.
-Terminal failure delivery has not been validated with a natural live error.
+| `status` | Meaning |
+| --- | --- |
+| `working` | The app reports the task is running. |
+| `needs_attention` | The task is waiting for you: an approval, a question or other input. |
+| `blocked` | Codex reports a runtime error. Claude never reports this. |
+| `idle` | Nothing is running or waiting. Doesn't mean the task succeeded. |
+| `unknown` | The task exists but its state can't be determined. |
 
-The helper scans local tasks about every 30 seconds while awake, independently
-of USB and allowance polling. It caches the same object under `status.tasks`.
-Wake and clock-generation changes invalidate cached task lists and discard
-earlier in-flight results before publishing a fresh collection.
-`status --json` invalidates task lists when the helper is stopped, the observation
-is over 37 seconds old, or its time is in the future: coverage becomes unavailable
-and tasks become null, with the original `observed_at` retained. Old helper
-snapshots may omit tasks entirely. A direct task check does not update the cache
-or the physical display. Existing installation and USB protocol are unchanged.
+Count tasks by status and show only the counts you have. Coverage is never
+complete, so a missing status doesn't mean zero and the list has no total.
+Treat unfamiliar `coverage` values as unavailable and unfamiliar statuses as
+`unknown`.
 
-Example with invented data:
+Claude tasks come from live Claude Code sessions in Claude Desktop; Claude Chat,
+Cowork and remote sessions aren't included. Codex tasks come from recent chats
+open in the Codex app. Some background chats can be missed, internal subagent
+threads are excluded, and a dismissed question card can still show as
+`needs_attention`.
+
+The helper refreshes tasks about every 30 seconds while awake and saves them as
+`tasks` in the status snapshot. It is omitted before the first check and by
+older helpers. Sleep and wake discard earlier results. `status --json` reports
+every provider as `unavailable` with `tasks: null` when the helper is stopped or
+the check is more than 37 seconds old or in the future, keeping the original
+`observed_at`.
+
+`pipkin tasks` never updates the cache or the display. The helper sends each
+fresh check to a display that reports protocol 2, with only each provider's
+coverage and its working, needs-attention and blocked counts. See the
+[display protocol](protocol.md#local-tasks).
 
 ```json
 {
@@ -184,9 +154,6 @@ Example with invented data:
   }
 }
 ```
-
-Unknown future statuses should be treated as unknown. Task status and allowance
-availability are separate; task collection never makes provider HTTPS requests.
 
 ## Reading fields
 

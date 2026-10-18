@@ -54,7 +54,7 @@ func cliCommands(buildVersion, licenseText, notices, goos string, output io.Writ
 		return err
 	}
 	return []cliCommand{
-		{name: "status", syntax: "pipkin status [--json]", summary: "Check that Pipkin is running and the display is connected", primary: true,
+		{name: "status", syntax: "pipkin status [--json]", summary: "Check Pipkin, your display and your allowance", primary: true,
 			details: statusHelp, parse: jsonOption, run: func(args []string) error { return statusCommandTo(args, output) }},
 		{name: "usage", syntax: "pipkin usage [--json]", summary: "Show your Claude and Codex allowance right now", primary: true,
 			details: usageHelp, parse: jsonOption, run: func(args []string) error { return usageCommandTo(args, output, os.Stderr) }},
@@ -63,7 +63,7 @@ func cliCommands(buildVersion, licenseText, notices, goos string, output io.Writ
 		{name: "flash", syntax: "pipkin flash [options]", summary: "Install or update the display's firmware", primary: true,
 			details: flashHelp, parse: func(options []string) error { _, err := parseFlashOptions(options); return err }, run: flashCommand},
 		{name: "uninstall", syntax: "pipkin uninstall", summary: "Remove Pipkin from this computer", primary: true, details: uninstallHelp, run: plain(uninstallCommand)},
-		{name: "tasks", syntax: "pipkin tasks [--json]", summary: "Show observed local Claude Code and Codex tasks", details: tasksHelp,
+		{name: "tasks", syntax: "pipkin tasks [--json]", summary: "Show your Claude Code and Codex tasks", details: tasksHelp,
 			parse: jsonOption, run: tasksCommand, standalone: true},
 		{name: "start", syntax: "pipkin start", summary: "Start Pipkin again after 'pipkin stop'", run: plain(startCommand)},
 		{name: "stop", syntax: "pipkin stop", summary: "Pause Pipkin until you next log in to this computer", details: stopHelp, run: plain(stopCommand)},

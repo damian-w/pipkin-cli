@@ -68,8 +68,7 @@ func updateConfig(update func(*Config) error) (Config, error) {
 	return config, err
 }
 
-// Only an explicit install may repair malformed settings. Keep the original
-// bytes in a private, unique backup before atomically replacing the file.
+// Only install repairs damaged settings, after privately backing up the original.
 func updateConfigWithRepair(update func(*Config) error, repair bool) (Config, string, error) {
 	var backup string
 	var config Config
@@ -95,7 +94,7 @@ func updateConfigWithRepair(update func(*Config) error, repair bool) (Config, st
 			err = json.Unmarshal(data, &config)
 		}
 		if err != nil && !repair {
-			return config, backup, fmt.Errorf("Pipkin configuration (config.json) is malformed; run 'pipkin install' to repair it: %w", err)
+			return config, backup, fmt.Errorf("Pipkin's settings file is damaged. Run 'pipkin install' to repair it: %w", err)
 		}
 		if err != nil && repair {
 			backup, err = backupInstallConfig(path, data)

@@ -42,7 +42,7 @@ func TestTasksMinimalJSONAndUnknownCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"counts unknown", "partial coverage", "Need attention: 1 observed", "complete counts are unknown"} {
+	for _, want := range []string{"Codex        1 waiting for you\n", "Claude Code  None found\n"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text lacks %q: %s", want, text)
 		}

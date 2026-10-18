@@ -76,7 +76,7 @@ func startCommand() error {
 		return err
 	}
 	if err := startHelper(); err != nil {
-		return commandPhaseError{message: "Pipkin couldn't start. Check its diagnostic log and the details below.", cause: err}
+		return commandPhaseError{message: "Pipkin couldn't start.", cause: err}
 	}
 	if running {
 		fmt.Println("Pipkin is already running.")
@@ -92,7 +92,7 @@ func stopCommand() error {
 		return err
 	}
 	if err := stopHelper(); err != nil {
-		return commandPhaseError{message: "Pipkin couldn't stop. Check the details below before trying again.", cause: err}
+		return commandPhaseError{message: "Pipkin couldn't stop.", cause: err}
 	}
 	if running {
 		fmt.Println("Pipkin is stopped. It starts again when you next log in to this computer.")
@@ -121,7 +121,7 @@ func restartCommand() error {
 		return err
 	}
 	if err := restartHelper(stopHelper, startHelper); err != nil {
-		return commandPhaseError{message: "Pipkin couldn't restart. Check its diagnostic log and the details below.", cause: err}
+		return commandPhaseError{message: "Pipkin couldn't restart.", cause: err}
 	}
 	fmt.Println("Pipkin is running again.")
 	return nil
@@ -152,12 +152,10 @@ func authorizeInstalledHelperWithNoticeFor(goos string, signedIn func() bool, ru
 	// The updater is still the old executable. Keychain permission must be given
 	// to the replacement at its final path, before its first background read.
 	command := exec.Command(installedBinary(), "authorize")
-	var capturedError cappedBuffer
-	capturedError.limit = 8 << 10
-	command.Stdin, command.Stdout, command.Stderr = os.Stdin, newAuthorizeNoticeWriter(noticeOut), &capturedError
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, newAuthorizeNoticeWriter(noticeOut), io.Discard
 	command.Env = append(os.Environ(), "PIPKIN_AUTHORIZE_NESTED=1")
 	if run(command) != nil {
-		fmt.Fprintf(warningOut, "Claude sign-in access is not ready. Run %s, then %s.\n", commandHint("authorize"), commandHint("restart"))
+		fmt.Fprintf(warningOut, "Pipkin can't read Claude's sign-in yet. Run %s.\n", commandHint("authorize"))
 	}
 }
 

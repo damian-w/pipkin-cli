@@ -1,6 +1,6 @@
 package pipkin
 
-// signedOutError keeps sign-out classification separate from its message.
+// signedOutError is a sign-out with a user-facing message.
 type signedOutError string
 
 func (e signedOutError) Error() string { return string(e) }

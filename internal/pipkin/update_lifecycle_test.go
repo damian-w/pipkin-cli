@@ -77,7 +77,7 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 				t.Fatalf("activation order = %v", events)
 			}
 			if denied {
-				if !strings.Contains(output.String(), "authorize") || !strings.Contains(output.String(), "restart") {
+				if !strings.Contains(output.String(), "authorize") {
 					t.Fatalf("authorization cancellation omitted actionable recovery: %q", output.String())
 				}
 			} else if output.Len() != 0 {

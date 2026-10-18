@@ -132,7 +132,12 @@ func TestProtocolFixture(t *testing.T) {
 		Session: &Window{Used: 235, Reset: testNow + 3600, Seconds: 18000},
 		Weekly:  &Window{Used: 412, Reset: testNow + 90000, Seconds: 604800}}
 	h.apps["codex"], h.apps["claude"] = "available", "available"
-	h.resync(map[string]string{"seq": "0", "clock_epoch": "0", "unix": "null"})
+	h.tasks = &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{
+		"codex": {Coverage: "partial", Tasks: []Task{{ID: "a", Status: "working"}, {ID: "b", Status: "working"},
+			{ID: "c", Status: "needs_attention"}, {ID: "d", Status: "idle"}, {ID: "e", Status: "unknown"}}},
+		"claude": {Coverage: "unavailable"}}}
+	h.tasksCurrent = true
+	h.resync(map[string]string{"seq": "0", "clock_epoch": "0", "unix": "null", "protocol_max": "2"})
 	h.syncClock("1799990000")
 	h.flush()
 	// Only fresh observations may enter the new clock epoch.
@@ -142,6 +147,10 @@ func TestProtocolFixture(t *testing.T) {
 		h.results <- providerResult{provider: provider, reading: &reading, generation: h.generation}
 	}
 	h.pollProviders(context.Background(), h.now())
+	h.tasks = &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow + 1, Providers: map[string]TaskProvider{
+		"codex":  {Coverage: "partial", Tasks: []Task{{ID: "a", Status: "working"}, {ID: "f", Status: "blocked"}}},
+		"claude": {Coverage: "partial", Tasks: []Task{{ID: "g", Status: "needs_attention"}, {ID: "h", Status: "needs_attention"}}}}}
+	h.tasksCurrent = true
 	h.flush()
 	h.readings["claude"].Observed = testNow + 2
 	h.readings["claude"].Session = &Window{NotStarted: true, Seconds: 18000}
@@ -167,6 +176,78 @@ func TestProtocolFixture(t *testing.T) {
 	want, err := os.ReadFile(path)
 	if err != nil || string(want) != got {
 		t.Fatalf("helper packets differ from %s (UPDATE_FIXTURES=1 regenerates):\n%s", path, got)
+	}
+}
+
+func TestTaskRecordsNeedProtocolTwo(t *testing.T) {
+	h, lines := testHelper()
+	h.tasks = &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{
+		"codex": {Coverage: "partial", Tasks: []Task{{ID: "a", Status: "working"}, {ID: "b", Status: "needs_attention"},
+			{ID: "c", Status: "idle"}, {ID: "d", Status: "unknown"}}},
+		"claude": {Coverage: "unsupported"}}}
+	h.tasksCurrent = true
+	identity := map[string]string{"seq": "0", "clock_epoch": "0", "unix": "1800000000", "protocol_max": "1"}
+	h.resync(identity)
+	if strings.Contains(strings.Join(*lines, ""), "kind=tasks") {
+		t.Fatalf("protocol 1 displays must not receive task records: %q", *lines)
+	}
+	*lines = nil
+	identity["seq"], identity["protocol_max"] = strconv.FormatUint(h.sequence, 10), "2"
+	h.resync(identity)
+	got := strings.Join(*lines, "")
+	for _, want := range []string{
+		" kind=tasks provider=codex coverage=partial observed=1800000000 working=1 attention=1 blocked=0\n",
+		" kind=tasks provider=claude coverage=unsupported observed=1800000000\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	for _, line := range *lines {
+		if strings.Contains(line, "kind=tasks") != strings.HasPrefix(line, "v=2 ") {
+			t.Fatalf("only task records use protocol 2: %q", line)
+		}
+	}
+	*lines = nil
+	h.flush()
+	if len(*lines) != 0 {
+		t.Fatalf("an unchanged collection must not be resent: %q", *lines)
+	}
+	next := *h.tasks
+	next.ObservedAt++
+	h.tasks = &next
+	h.flush()
+	if len(*lines) != 2 {
+		t.Fatalf("each fresh collection must be sent, even with unchanged counts: %q", *lines)
+	}
+	*lines = nil
+	h.invalidateTasks(h.now())
+	h.flush()
+	if len(*lines) != 0 {
+		t.Fatalf("invalidated tasks must wait for a fresh collection: %q", *lines)
+	}
+	h.disconnect("test")
+	if h.taskRecords {
+		t.Fatal("a reconnected display must report its protocol again")
+	}
+}
+
+func TestTaskFieldsSendCountsOnly(t *testing.T) {
+	many := make([]Task, 1200)
+	for i := range many {
+		many[i] = Task{ID: strconv.Itoa(i), Status: "working"}
+	}
+	snapshot := &TaskSnapshot{ObservedAt: testNow, Providers: map[string]TaskProvider{
+		"codex": {Coverage: "partial", Tasks: many}, "claude": {Coverage: "future"}}}
+	if got := taskFields("codex", snapshot); got != "kind=tasks provider=codex coverage=partial observed=1800000000 working=999 attention=0 blocked=0" {
+		t.Fatalf("codex = %q", got)
+	}
+	if got := taskFields("claude", snapshot); got != "kind=tasks provider=claude coverage=unavailable observed=1800000000" {
+		t.Fatalf("unfamiliar coverage must be unavailable: %q", got)
+	}
+	snapshot.ObservedAt = 0
+	if got := taskFields("codex", snapshot); got != "" {
+		t.Fatalf("an invalid observation must not be sent: %q", got)
 	}
 }
 
@@ -398,7 +479,7 @@ func TestRunCommandClearsStalePIDBeforeConfigurationWait(t *testing.T) {
 	select {
 	case err := <-done:
 		finished = true
-		if err == nil || !strings.Contains(err.Error(), "configuration") {
+		if err == nil || !strings.Contains(err.Error(), "settings file") {
 			t.Fatalf("invalid configuration must stop startup: %v", err)
 		}
 	case <-time.After(time.Second):

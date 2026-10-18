@@ -81,7 +81,7 @@ func TestOutputFreshnessSignInAndMissingReadings(t *testing.T) {
 		{name: "expired", state: "signed_out", message: "Sign-in expired; open Codex to renew it", reading: &Reading{SessionNoCap: true}, want: []string{"Not signed in", "! Sign-in expired; open Codex to renew it"}, absent: []string{"Session", "Last known"}},
 		{name: "account mismatch", state: "signed_out", message: "The active account changed; sign in again", want: []string{"! The active account changed; sign in again"}},
 		{name: "nil reading", state: "available", want: []string{"No reading yet"}},
-		{name: "placeholder failed reading", state: "unavailable", message: "Usage is unavailable", reading: &Reading{Account: "private"}, want: []string{"No reading available", "! Usage is unavailable"}, absent: []string{"Session", "private"}},
+		{name: "placeholder failed reading", state: "unavailable", message: "Usage is unavailable", reading: &Reading{Account: "private"}, want: []string{"No reading yet", "! Usage is unavailable"}, absent: []string{"Session", "private"}},
 		{name: "unfamiliar state", state: "future_state", reading: &Reading{SessionNoCap: true}, want: []string{"Last known reading (age unknown)"}},
 		{name: "expired reset keeps allowance", state: "available", reading: &Reading{Session: &Window{Used: 800, Reset: outputTestNow - 1}}, want: []string{"20% left  awaiting refresh"}, absent: []string{"100% left"}},
 	} {

@@ -6,21 +6,16 @@ import (
 )
 
 const statusHelp = `
-Shows saved allowance readings, task summaries and the last known display connection.
-Does not contact Claude or Codex or probe the display.
-Running 'pipkin' without a command shows this view when installed.
-Task counts are observed only; partial or unavailable coverage is stated.
+Also shows your Claude Code and Codex tasks. Doesn't contact Claude or Codex.
+Running 'pipkin' on its own shows the same view.
 
-  --json  Print the cached snapshot, including local task observations
+  --json  Print the saved status as JSON
 `
 
 const usageHelp = `
-Checks your existing Claude and Codex sign-ins for current subscription usage.
-Does not change your sign-ins or update the display's saved readings.
+Includes model limits, credits and extra usage when available.
 
-  --json  Print all available allowance fields
-
-For repeated checks without provider requests, use 'pipkin status --json'.
+  --json  Print every allowance field as JSON
 `
 
 const stopHelp = `
@@ -28,48 +23,36 @@ The display stops updating. Run 'pipkin start' to resume sooner.
 `
 
 const uninstallHelp = `
-Stops Pipkin and removes automatic startup, settings, remembered boards and logs.
-Your Claude and Codex sign-ins are kept.
-Requires a verified installation in its own folder. Unsafe paths, directory links
-and unrelated files are refused before Pipkin is stopped. Run it from outside
-Pipkin's installation folder; a PIPKIN_HOME override must be absolute.
+Also removes Pipkin's settings, saved boards and logs. Your Claude and Codex
+sign-ins are kept.
 `
 
 const installHelp = `
-Installs Pipkin and starts it automatically when you log in to this computer.
-Existing sign-ins are kept. On macOS, a Keychain dialog may ask for your Mac
-login password; choose Always Allow.
+Installs Pipkin and starts it each time you log in. Run it again to repair
+Pipkin; your settings and sign-ins are kept.
 
-Malformed settings are backed up before repair. Valid settings are kept.
-On macOS and Linux, PATH fixes are printed for you to paste; shell startup
-files are not edited automatically.
+On a Mac, if a Keychain prompt appears, enter your Mac login password and
+choose Always Allow.
 `
 
 const updateHelp = `
-Checks GitHub for a newer Pipkin release and verifies downloads before replacing
-the app. Your settings and sign-ins are kept.
-
-May suggest newer display firmware using its saved version. To update the
-display itself, run 'pipkin flash'.
+Your settings and sign-ins are kept. If newer display firmware is available,
+run 'pipkin flash' to install it.
 `
 
 const authorizeHelp = `
-On macOS, retries access to Claude's saved sign-in. A Keychain dialog may ask
-for your Mac login password; choose Always Allow for background access.
-No dialog is needed when an accessible Claude Code sign-in can be used.
-A running Pipkin restarts after successful authorization.
+When the Keychain prompt appears, enter your Mac login password and choose
+Always Allow. Pipkin restarts afterwards if it's running.
 `
 
 const flashHelp = `
-Downloads the latest firmware, checks the connected display, shows what it
-will do and only continues if you answer yes. Updates keep your settings.
-Keep the USB cable plugged in until it finishes.
-Ctrl-C cancels before writing. Once writing starts, wait for verification and
-the display restart to finish.
+Downloads the latest firmware, checks your display and asks before writing.
+Updates keep your settings. Keep the USB cable plugged in until it finishes;
+Ctrl-C is safe until writing starts.
 
   --reinstall        Write the same version again to repair a failed update
   --port PORT        Choose a port, e.g. /dev/cu.usbserial-110 or COM9
-  --version VERSION  Install a specific firmware version, not a CLI version
+  --version VERSION  Install a specific firmware version
   --board PROFILE    For board builders; see 'pipkin help identify'
 
 Guide: github.com/damian-w/pipkin-cli/blob/main/docs/firmware.md

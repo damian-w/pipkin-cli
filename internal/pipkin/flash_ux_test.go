@@ -145,7 +145,7 @@ func TestFlashCancellationDuringCriticalPhasesFinishesSafely(t *testing.T) {
 				t.Fatal("cancellation skipped firmware verification, restart, boot check or helper restoration")
 			}
 			text := f.output.String()
-			if strings.Count(text, "Finishing the firmware write; please keep the cable plugged in.") != 1 || strings.Contains(text, "No firmware was written") || strings.Index(text, "Finishing the firmware write") > strings.Index(text, "1.0.1 is running") {
+			if strings.Count(text, "Finishing the firmware write. Keep the cable plugged in.") != 1 || strings.Contains(text, "No firmware was written") || strings.Index(text, "Finishing the firmware write") > strings.Index(text, "1.0.1 is running") {
 				t.Fatal(text)
 			}
 		})
@@ -261,7 +261,7 @@ func TestFlashWriterFailuresRespectTheWriteBoundary(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			boom := errors.New("fixture terminal failed")
-			needle := map[string]string{"release": "Checking the firmware release", "probe warning": "screen may go blank", "plan": "Install Pipkin", "prompt": "[y/N]", "write progress": "about a minute", "late cancellation": "Finishing the firmware write", "success": "is running"}[phase]
+			needle := map[string]string{"release": "Checking the firmware release", "probe warning": "screen may go blank", "plan": "Ready to install", "prompt": "[y/N]", "write progress": "about a minute", "late cancellation": "Finishing the firmware write", "success": "is running"}[phase]
 			output := flashTestOutputHook{w: &f.output, write: func(text string) error {
 				if strings.Contains(text, needle) {
 					return boom
@@ -336,77 +336,67 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 	}
 }
 
+func flashRecoveryHint(goos, port string) string {
+	return commandHintFor(goos, "/unused", true, "flash", "--port", port, "--version", "1.0.1", "--reinstall")
+}
+
 func TestFlashRecoveryIsReadableSafeAndPreservesCause(t *testing.T) {
 	boom := errors.New("A fatal error occurred: fixture serial failure\x1b[2J\n" + strings.Repeat("detail ", 40))
-	err := &flashWriteFailure{cause: boom, port: "TESTPORT", version: "1.0.1"}
-	text := err.Error()
-	if !errors.Is(err, boom) || strings.Index(text, "didn't finish") > strings.Index(text, "To fix it:") || strings.Index(text, "To fix it:") > strings.Index(text, "Details:") || !strings.Contains(text, "pipkin flash --port TESTPORT --version 1.0.1 --reinstall") {
-		t.Fatal(text)
-	}
-	for _, line := range strings.Split(text, "\n") {
-		if len(line) >= 80 || strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
-			t.Fatalf("unsafe or overlong recovery line: %q", line)
+	for _, written := range []bool{false, true} {
+		err := &flashWriteFailure{cause: boom, written: written, command: flashRecoveryHint("darwin", "TESTPORT")}
+		text := err.Error()
+		if !errors.Is(err, boom) || strings.Contains(text, "didn't finish") == written || strings.Index(text, "To fix it:") > strings.Index(text, "Details:") || !strings.Contains(text, "pipkin flash --port TESTPORT --version 1.0.1 --reinstall") {
+			t.Fatal(text)
 		}
-	}
-	if got := flashRecoveryArgument("port $(bad);'quoted", "darwin"); got != "'port $(bad);'\"'\"'quoted'" {
-		t.Fatalf("unsafe POSIX recovery argument %q", got)
-	}
-	if got := flashRecoveryArgument("port $(bad);'quoted", "windows"); got != "'port $(bad);''quoted'" {
-		t.Fatalf("unsafe PowerShell recovery argument %q", got)
+		for _, line := range strings.Split(text, "\n") {
+			if len(line) >= 80 || strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
+				t.Fatalf("unsafe or overlong recovery line: %q", line)
+			}
+		}
 	}
 }
 
 func TestFlashRecoveryKeepsLongQuotedCommandOnOneLine(t *testing.T) {
 	port := "/dev/cu.usbserial-" + strings.Repeat("long-display-", 7) + " $(literal);'quoted"
-	failure := &flashWriteFailure{cause: errors.New("fixture serial failure"), port: port, version: "1.0.1"}
-	command := flashRecoveryCommand(port, failure.version, runtime.GOOS)
+	command := flashRecoveryHint(runtime.GOOS, port)
+	failure := &flashWriteFailure{cause: errors.New("fixture serial failure"), command: command}
 	if len(command) < 80 || strings.Contains(command, "\n") {
 		t.Fatal("fixture must exercise a long, atomic command")
 	}
 	text := failure.Error()
-	want := "  2. Run this command:\n     " + command + "\n"
-	if !strings.Contains(text, want) {
+	if !strings.Contains(text, "  2. Run this command:\n     "+command+"\n") {
 		t.Fatalf("recovery command was wrapped or its quoting changed:\n%s", text)
 	}
 	for _, line := range strings.Split(text, "\n") {
-		if strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
-			t.Fatalf("unsafe terminal character in %q", line)
-		}
 		if line != "     "+command && len(line) >= 80 {
 			t.Fatalf("recovery prose exceeded the terminal width: %q", line)
 		}
 	}
 }
 
-func TestFlashRecoveryArgumentsPreserveExactPaths(t *testing.T) {
+func TestCommandHintArgumentsPreserveExactPaths(t *testing.T) {
 	values := []string{"/tmp/serial-é", "/tmp/串口 'quoted' $(literal);back\\slash", "/tmp/serial-\n\r\t\x1b"}
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		for _, value := range values {
-			argument := flashRecoveryArgument(value, goos)
-			command := flashRecoveryCommand(value, "1.0.1", goos)
-			if strings.IndexFunc(argument, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 || strings.ContainsAny(command, "\r\n") {
-				t.Fatalf("recovery argument contains terminal controls or multiple physical lines: %q", argument)
+			command := flashRecoveryHint(goos, value)
+			if strings.IndexFunc(command, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+				t.Fatalf("command hint contains terminal controls or multiple physical lines: %q", command)
 			}
 			if goos != "windows" && runtime.GOOS != "windows" {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				parse := exec.CommandContext(ctx, "/bin/bash", "--noprofile", "--norc", "-c", "printf '%s' "+argument)
+				parse := exec.CommandContext(ctx, "/bin/bash", "--noprofile", "--norc", "-c", "printf '%s' "+shellQuote(value))
 				parse.Env = []string{"PATH=/usr/bin:/bin", "BASH_ENV=/dev/null", "ENV=/dev/null"}
 				data, err := parse.Output()
 				cancel()
 				if err != nil || string(data) != value {
-					t.Fatalf("recovery argument changed its POSIX path: got=%q want=%q err=%v", data, value, err)
+					t.Fatalf("argument changed its POSIX path: got=%q want=%q err=%v", data, value, err)
 				}
 			}
 		}
 	}
-	// Keep the recovery command exact inside the full error, including Unicode.
-	failure := &flashWriteFailure{cause: errors.New("fixture failure"), port: values[0], version: "1.0.1"}
-	if !strings.Contains(failure.Error(), "     "+flashRecoveryCommand(values[0], failure.version, runtime.GOOS)+"\n") {
-		t.Fatal("full recovery output changed the quoted path")
-	}
 }
 
-func TestFlashRecoveryPowerShellArgumentsPreserveExactPaths(t *testing.T) {
+func TestCommandHintPowerShellArgumentsPreserveExactPaths(t *testing.T) {
 	name := "pwsh"
 	if runtime.GOOS == "windows" {
 		name = "powershell.exe"
@@ -419,7 +409,7 @@ func TestFlashRecoveryPowerShellArgumentsPreserveExactPaths(t *testing.T) {
 	var script strings.Builder
 	script.WriteString("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);")
 	for _, value := range values {
-		script.WriteString("[Console]::Write(" + flashRecoveryArgument(value, "windows") + ");[Console]::Write([char]0);")
+		script.WriteString("[Console]::Write(" + powerShellQuote(value) + ");[Console]::Write([char]0);")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -430,11 +420,11 @@ func TestFlashRecoveryPowerShellArgumentsPreserveExactPaths(t *testing.T) {
 	}
 	parts := bytes.Split(data, []byte{0})
 	if len(parts) != len(values)+1 || len(parts[len(parts)-1]) != 0 {
-		t.Fatalf("PowerShell changed recovery argument boundaries: %q", data)
+		t.Fatalf("PowerShell changed argument boundaries: %q", data)
 	}
 	for i, value := range values {
 		if string(parts[i]) != value {
-			t.Fatalf("recovery argument changed its PowerShell path: got=%q want=%q", parts[i], value)
+			t.Fatalf("argument changed its PowerShell path: got=%q want=%q", parts[i], value)
 		}
 	}
 }

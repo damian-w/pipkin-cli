@@ -41,8 +41,7 @@ func claudeTaskProcessInfo(pid int) (processIdentity, error) {
 	if before.Proc.P_pid != int32(pid) || before.Eproc.Ucred.Uid != uint32(os.Getuid()) {
 		return processIdentity{}, errors.New("Claude task process owner is unavailable")
 	}
-	// proc_pidpath reads only the executable path. It avoids fetching process
-	// arguments and environment variables through kern.procargs2.
+	// proc_pidpath avoids reading other processes' arguments and environment.
 	buffer := make([]byte, 4096)
 	n := claudeTaskDarwinNative.path(int32(pid), &buffer[0], uint32(len(buffer)))
 	if n <= 0 || int(n) >= len(buffer) {

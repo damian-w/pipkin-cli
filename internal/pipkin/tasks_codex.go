@@ -239,8 +239,7 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 			}
 		}
 	}
-	// Closing the connection removes subscriptions even when a deadline leaves
-	// no time for an explicit unfollow broadcast.
+	// Closing the connection also ends its stream subscriptions.
 	if !failed && observer.initialized {
 		observer.trace("complete_partial", "", 0)
 		return observer.result()
@@ -508,8 +507,7 @@ func (o *codexTaskObserver) result() TaskProvider {
 	return result
 }
 
-// Diagnostics are opt-in test instrumentation; identifiers, payloads, paths and
-// error prose never enter this callback.
+// trace feeds the opt-in live test; it never sees IDs, payloads or paths.
 func (o *codexTaskObserver) trace(phase, method string, size int) {
 	if o.diagnostic == nil || o.diagnostics >= 80 {
 		return
@@ -554,8 +552,7 @@ func codexTaskReadTimedOut(err error) bool {
 	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	// Windows named-pipe reads use os.File. Its wrapped deadline errors have
-	// Timeout but need not implement net.Error's additional Temporary method.
+	// Named-pipe deadline errors implement Timeout but not net.Error.
 	var timeout interface{ Timeout() bool }
 	return errors.As(err, &timeout) && timeout.Timeout()
 }

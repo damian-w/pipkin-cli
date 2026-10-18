@@ -2,8 +2,12 @@ package pipkin
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
+
+// The display shows observed counts up to this bound.
+const maxTaskCount = 999
 
 type taskCollectionResult struct {
 	snapshot   TaskSnapshot
@@ -11,22 +15,18 @@ type taskCollectionResult struct {
 }
 
 func (h *Helper) invalidateTasks(now time.Time) {
-	h.taskGeneration = h.generation
 	h.tasks = readableTaskSnapshot(h.tasks, false, now)
+	h.tasksCurrent = false
 	h.due["tasks"] = time.Time{}
 	if h.taskCancel != nil {
 		h.taskCancel()
 	}
 }
 
-// Local task reads run independently of USB and subscription polling. A slow or
-// unsupported GUI cannot delay the display loop or change its wire protocol.
+// pollTasks collects in the background so a slow app never delays the display.
 func (h *Helper) pollTasks(ctx context.Context, now time.Time) {
 	if h.collectTasks == nil || ctx.Err() != nil {
 		return
-	}
-	if h.taskGeneration != h.generation {
-		h.invalidateTasks(now)
 	}
 	select {
 	case result := <-h.taskResults:
@@ -36,10 +36,9 @@ func (h *Helper) pollTasks(ctx context.Context, now time.Time) {
 			h.taskCancel = nil
 		}
 		if result.generation == h.generation {
-			h.tasks = &result.snapshot
+			h.tasks, h.tasksCurrent = &result.snapshot, true
 		} else {
-			// A pre-wake worker may finish after resume and stamp its old
-			// observations with the new wall clock. Re-read before publishing.
+			// A result from before sleep is stale; collect again.
 			h.due["tasks"] = time.Time{}
 		}
 	default:
@@ -80,4 +79,33 @@ func readableTaskSnapshot(snapshot *TaskSnapshot, running bool, now time.Time) *
 		copy.Providers[provider] = value
 	}
 	return &copy
+}
+
+// Protocol 2 displays accept task records; earlier firmware rejects them.
+func acceptsTasks(identity map[string]string) bool {
+	maximum, ok := decimalUint(identity["protocol_max"])
+	return ok && maximum >= 2
+}
+
+// taskFields formats a provider's observed counts for the display. Idle and unknown
+// tasks, task IDs and source update times stay on the computer.
+func taskFields(provider string, snapshot *TaskSnapshot) string {
+	if validEpoch(float64(snapshot.ObservedAt)) == 0 {
+		return ""
+	}
+	p := snapshot.Providers[provider]
+	coverage := p.Coverage
+	if coverage != "partial" && coverage != "unsupported" {
+		coverage = "unavailable"
+	}
+	fields := fmt.Sprintf("kind=tasks provider=%s coverage=%s observed=%d", provider, coverage, snapshot.ObservedAt)
+	if coverage != "partial" {
+		return fields
+	}
+	counts := map[string]int{}
+	for _, task := range p.Tasks {
+		counts[task.Status]++
+	}
+	return fields + fmt.Sprintf(" working=%d attention=%d blocked=%d", min(counts["working"], maxTaskCount),
+		min(counts["needs_attention"], maxTaskCount), min(counts["blocked"], maxTaskCount))
 }

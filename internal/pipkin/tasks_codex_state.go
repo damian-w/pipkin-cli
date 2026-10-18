@@ -76,9 +76,8 @@ type codexTaskSnapshot struct {
 	} `json:"turnHistory"`
 }
 
-// The retained projection contains no conversation, question, answer or error text.
-// Scope is 0 for an excluded internal thread, 1 for a verified user root, and 2
-// when the available source metadata cannot establish that distinction.
+// The projection holds no conversation text. Scope is 0 for an internal
+// thread, 1 for a user thread and 2 when unknown.
 type codexTaskMeta struct {
 	updated        *int64
 	runtime        codexTaskRuntime
@@ -236,9 +235,8 @@ func codexTaskTailInput(turn *codexTaskTurn) (input, plan bool) {
 	return input, plan
 }
 
-// Only a contiguous loaded suffix proves that all later replies were seen.
-// Questions before a canonical gap remain uncertain unless a loaded reply
-// explicitly answers them. All IDs and reply text are transient projection data.
+// Questions before a gap in loaded history stay uncertain unless a loaded
+// reply answers them.
 func codexTaskQuestionHistory(s *codexTaskSnapshot) ([]codexTaskTurn, int, error) {
 	if s.TurnHistory.Kind != "canonical" {
 		if s.TurnHistory.Kind != "" {
@@ -275,8 +273,7 @@ func codexTaskQuestionHistory(s *codexTaskSnapshot) ([]codexTaskTurn, int, error
 	return turns, certainFrom, nil
 }
 
-// GUI-only Skip/Dismiss state is absent from this stream. Count unanswered
-// structured cards, and never invent clearing from a newer turn or silence.
+// Skip/Dismiss isn't in this stream, so an unanswered card still needs attention.
 func codexTaskPendingCards(s *codexTaskSnapshot) (cards int, uncertain bool, err error) {
 	turns, certainFrom, err := codexTaskQuestionHistory(s)
 	if err != nil {

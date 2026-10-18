@@ -62,7 +62,7 @@ func TestInstallFlowSummarizesAfterActivationAndUsesExactPATHHint(t *testing.T) 
 						t.Fatal("install success was reported before activation")
 					}
 					if denied {
-						fmt.Fprintln(out, "Claude sign-in access is not ready. Run the authorize and restart commands.")
+						fmt.Fprintln(out, "Pipkin can't read Claude's sign-in yet. Run the authorize command.")
 					}
 				},
 				hint:    func(args ...string) string { return commandHintFor("darwin", launcher, false, args...) },
@@ -86,7 +86,7 @@ func TestInstallFlowSummarizesAfterActivationAndUsesExactPATHHint(t *testing.T) 
 				t.Fatal("staging was not cleaned")
 			}
 			text := output.String()
-			if !strings.HasPrefix(text, "Pipkin 9.8.7 is installed and running.") || !strings.Contains(text, "when you log in") || !strings.Contains(text, "Previous settings were saved at /synthetic/config.bad") {
+			if !strings.HasPrefix(text, "Pipkin 9.8.7 is installed and running.") || !strings.Contains(text, "when you log in") || !strings.Contains(text, "The old file is at /synthetic/config.bad") {
 				t.Fatalf("install omitted its summary or config backup: %s", text)
 			}
 			if !strings.Contains(text, "Next: "+deps.hint("status")) || !strings.Contains(text, deps.pathFix) {
@@ -95,7 +95,7 @@ func TestInstallFlowSummarizesAfterActivationAndUsesExactPATHHint(t *testing.T) 
 			if strings.Contains(text, ".zshrc") || strings.Contains(text, ".bashrc") || strings.Contains(text, "detected automatically") {
 				t.Fatal("install edits shell startup or claims access that was not verified")
 			}
-			if strings.Contains(text, "not ready") != denied {
+			if strings.Contains(text, "sign-in yet") != denied {
 				t.Fatal("authorization result was lost or invented")
 			}
 		})
@@ -197,7 +197,7 @@ func TestFirmwareAdviceUsesOnlySavedVersionAndBoundedOptionalLookup(t *testing.T
 		if err != nil || calls != map[bool]int{true: 1, false: 0}[current == "1.0.0"] {
 			t.Fatalf("invalid saved firmware initiated advice: %v", err)
 		}
-		if current == "1.0.0" && (!strings.Contains(output.String(), "Saved display firmware: 1.0.0") || !strings.Contains(output.String(), "'/synthetic/pipkin' flash")) {
+		if current == "1.0.0" && (!strings.Contains(output.String(), "Display firmware 1.1.0 is available (yours is 1.0.0)") || !strings.Contains(output.String(), "'/synthetic/pipkin' flash")) {
 			t.Fatalf("firmware advice invented a live state or unusable command: %s", output.String())
 		}
 	}
@@ -240,9 +240,8 @@ func TestInstalledAuthorizationCapturesAndDiscardsBoundedChildOutput(t *testing.
 					t.Fatal(err)
 				}
 			}
-			captured, ok := cmd.Stderr.(*cappedBuffer)
-			if !ok || captured.Len() > 8<<10 || !captured.truncated {
-				t.Fatal("child output was not bounded")
+			if cmd.Stderr != io.Discard {
+				t.Fatal("child stderr was not discarded")
 			}
 			if _, ok := cmd.Stdout.(*authorizeNoticeWriter); !ok {
 				t.Fatal("child stdout was not restricted to the permission notice")

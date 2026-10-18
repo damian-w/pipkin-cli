@@ -43,8 +43,7 @@ type claudeTaskRegistry struct {
 	PIDDomain       string   `json:"pidDomain"`
 }
 
-// Decode only the fields needed to reconcile an idle engine with its GUI task.
-// In particular, action text, prompts, titles and errors are never retained.
+// Decode only status fields; prompts, titles and errors are never kept.
 type claudeTaskMetadata struct {
 	SessionID          string             `json:"sessionId"`
 	CLISessionID       string             `json:"cliSessionId"`
@@ -70,8 +69,7 @@ func (p *claudeTaskPresence) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// The GUI uses the presence of a string, including an empty one, rather than
-// its prose to interpret a turn wrap-up. Do not retain that private text.
+// The GUI checks only whether these strings exist, so their text is never kept.
 type claudeTaskStringPresence bool
 
 func (p *claudeTaskStringPresence) UnmarshalJSON(data []byte) error {
@@ -141,8 +139,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 	if ctx.Err() != nil || len(records) == 0 {
 		return unavailable
 	}
-	// Find metadata directories once, and read only a matching live session's
-	// file. Historical chats and transcript JSONL files are not scanned.
+	// Read metadata only for live sessions; transcripts are never scanned.
 	var stores []string
 	for _, root := range deps.desktopDirs {
 		base := filepath.Join(root, "claude-code-sessions")
@@ -175,8 +172,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 		case "waiting":
 			task.Status = "needs_attention"
 		case "idle":
-			// An idle engine can still have a saved request for human input.
-			// Missing metadata cannot establish the overall task is idle.
+			// An idle engine may still be waiting for input, so idle needs metadata.
 			task.Status = "unknown"
 			matchedMetadata := false
 			metadataState := ""
@@ -192,8 +188,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 				case metadata.Archived:
 					candidate = "archived"
 				case bool(metadata.ErrorPresent):
-					// Failure detection has not been validated. Do not report a
-					// blocked task or claim this idle engine's task is healthy.
+					// Errors are unverified, so report unknown rather than blocked.
 					candidate = "unknown"
 				case validClaudeUUID(metadata.LastAssistantUUID) &&
 					metadata.PostTurnSummaryFor == metadata.LastAssistantUUID &&
@@ -216,8 +211,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 					}
 					switch category {
 					case "blocked", "need_input":
-						// A semantic request for human input, with no exact
-						// persisted transition time, is not a terminal failure.
+						// A request for input means waiting, not failed.
 						candidate = "needs_attention"
 					case "failed":
 						candidate = "unknown"
@@ -230,8 +224,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 				}
 			}
 			if metadataConflict {
-				// Old and migrated profile copies cannot select a task state
-				// by directory order, including contradictory archive markers.
+				// Copies in several profiles must agree; directory order never decides.
 				task.Status, task.UpdatedAt = "unknown", nil
 			} else if matchedMetadata {
 				task.Status = metadataState

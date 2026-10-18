@@ -73,8 +73,9 @@ type Helper struct {
 	monitor          func(context.Context, chan<- powerEvent) (func(), error)
 	handlingPower    bool
 	tasks            *TaskSnapshot
+	tasksCurrent     bool // collected in this generation, so tasks may be sent
+	taskRecords      bool // the display accepts protocol 2 task records
 	taskPending      bool
-	taskGeneration   uint64
 	taskCancel       context.CancelFunc
 	taskResults      chan taskCollectionResult
 	collectTasks     func(context.Context) TaskSnapshot
@@ -114,16 +115,22 @@ func (h *Helper) send(fields string) bool {
 	if !h.handlingPower && !strings.HasPrefix(fields, "kind=host ") {
 		h.drainPowerEvents(h.powerEvents)
 	}
-	if generation != h.generation && strings.HasPrefix(fields, "kind=usage ") {
+	tasks := strings.HasPrefix(fields, "kind=tasks ")
+	if generation != h.generation && (tasks || strings.HasPrefix(fields, "kind=usage ")) {
 		return false
 	}
 	if h.power.suspended() && !strings.HasPrefix(fields, "kind=host ") {
 		return false
 	}
+	// Each record carries the protocol version that introduced its kind.
+	protocol := 1
+	if tasks {
+		protocol = 2
+	}
 	h.sequence++
 	ctx, cancel := context.WithTimeout(h.context(), powerWriteTimeout)
 	defer cancel()
-	if err := h.write(ctx, fmt.Sprintf("v=1 seq=%d %s\n", h.sequence, fields)); err != nil {
+	if err := h.write(ctx, fmt.Sprintf("v=%d seq=%d %s\n", protocol, h.sequence, fields)); err != nil {
 		h.disconnect("write failed: " + err.Error())
 		return false
 	}
@@ -140,6 +147,7 @@ func (h *Helper) disconnect(reason string) {
 	h.sent = map[string]string{}
 	h.identifyPending = false
 	h.clockSynced = false
+	h.taskRecords = false
 }
 
 func (h *Helper) connect(ctx context.Context) {
@@ -200,6 +208,7 @@ func (h *Helper) connectPorts(ctx context.Context, ports []string, open func(str
 }
 
 func (h *Helper) resync(identity map[string]string) {
+	h.taskRecords = acceptsTasks(identity)
 	seq, epoch := identityClock(identity)
 	if seq < h.sequence && epoch == h.clockEpoch {
 		h.invalidateObservations()
@@ -297,6 +306,24 @@ func (h *Helper) flush() {
 				return
 			}
 			h.sent[provider] = fields
+		}
+	}
+	if !h.taskRecords || !h.tasksCurrent || h.tasks == nil {
+		return
+	}
+	for _, provider := range providers {
+		fields := taskFields(provider, h.tasks)
+		if fields == "" {
+			continue
+		}
+		if h.clockEpoch != 0 {
+			fields += fmt.Sprintf(" clock_epoch=%d", h.clockEpoch)
+		}
+		if h.sent[provider+"_tasks"] != fields {
+			if !h.send(fields) {
+				return
+			}
+			h.sent[provider+"_tasks"] = fields
 		}
 	}
 }

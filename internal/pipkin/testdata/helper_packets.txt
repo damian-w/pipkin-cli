@@ -4,16 +4,20 @@ v=1 seq=3 kind=app provider=codex state=available
 v=1 seq=4 kind=usage provider=codex mode=full account=codex observed=1800000000 session=no_cap weekly=metered weekly_id=r1800526000 weekly_used=1000 weekly_reset=1800526000 weekly_seconds=604800 banked=0
 v=1 seq=5 kind=app provider=claude state=available
 v=1 seq=6 kind=usage provider=claude mode=full account=claude observed=1800000000 session=metered session_id=r1800003600 session_used=235 session_reset=1800003600 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800
-v=1 seq=7 kind=clock unix=1800000000 tz=600 rebase=1
-v=1 seq=8 kind=app provider=codex state=available
-v=1 seq=9 kind=app provider=claude state=available
-v=1 seq=10 kind=usage provider=codex mode=full account=codex observed=1800000001 session=no_cap weekly=metered weekly_id=r1800526000 weekly_used=1000 weekly_reset=1800526000 weekly_seconds=604800 banked=0 clock_epoch=7
-v=1 seq=11 kind=usage provider=claude mode=full account=claude observed=1800000001 session=metered session_id=r1800003600 session_used=235 session_reset=1800003600 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=7
-v=1 seq=12 kind=usage provider=claude mode=full account=claude observed=1800000002 session=not_started session_id=current session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=7
-v=1 seq=13 kind=usage provider=claude mode=full account=claude observed=1800000003 session=metered session_id=r1800018000 session_used=10 session_reset=1800018000 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=7
-v=1 seq=14 kind=host state=asleep
-v=1 seq=15 kind=host state=asleep
-v=1 seq=16 kind=host state=asleep
-v=1 seq=17 kind=host state=asleep
-v=1 seq=18 kind=host state=awake
-v=1 seq=19 kind=host state=disconnected
+v=2 seq=7 kind=tasks provider=codex coverage=partial observed=1800000000 working=2 attention=1 blocked=0
+v=2 seq=8 kind=tasks provider=claude coverage=unavailable observed=1800000000
+v=1 seq=9 kind=clock unix=1800000000 tz=600 rebase=1
+v=1 seq=10 kind=app provider=codex state=available
+v=1 seq=11 kind=app provider=claude state=available
+v=1 seq=12 kind=usage provider=codex mode=full account=codex observed=1800000001 session=no_cap weekly=metered weekly_id=r1800526000 weekly_used=1000 weekly_reset=1800526000 weekly_seconds=604800 banked=0 clock_epoch=9
+v=1 seq=13 kind=usage provider=claude mode=full account=claude observed=1800000001 session=metered session_id=r1800003600 session_used=235 session_reset=1800003600 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=9
+v=2 seq=14 kind=tasks provider=codex coverage=partial observed=1800000001 working=1 attention=0 blocked=1 clock_epoch=9
+v=2 seq=15 kind=tasks provider=claude coverage=partial observed=1800000001 working=0 attention=2 blocked=0 clock_epoch=9
+v=1 seq=16 kind=usage provider=claude mode=full account=claude observed=1800000002 session=not_started session_id=current session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=9
+v=1 seq=17 kind=usage provider=claude mode=full account=claude observed=1800000003 session=metered session_id=r1800018000 session_used=10 session_reset=1800018000 session_seconds=18000 weekly=metered weekly_id=r1800090000 weekly_used=412 weekly_reset=1800090000 weekly_seconds=604800 clock_epoch=9
+v=1 seq=18 kind=host state=asleep
+v=1 seq=19 kind=host state=asleep
+v=1 seq=20 kind=host state=asleep
+v=1 seq=21 kind=host state=asleep
+v=1 seq=22 kind=host state=awake
+v=1 seq=23 kind=host state=disconnected

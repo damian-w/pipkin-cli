@@ -17,7 +17,7 @@ import (
 	"unicode/utf8"
 )
 
-const authorizePromptNotice = "macOS may ask for your Mac login password to read Claude's saved sign-in. Choose Always Allow for background access."
+const authorizePromptNotice = "If macOS asks for your Mac login password to read Claude's sign-in, enter it and choose Always Allow."
 
 type installCommandDeps struct {
 	buildVersion, goos string
@@ -52,7 +52,7 @@ func commandLockError(action string, err error) error {
 	if errors.Is(err, errLockBusy) {
 		message = "Another Pipkin install, update or firmware operation is running. Try again shortly."
 	} else if !errors.Is(err, os.ErrPermission) {
-		message = "Couldn't " + action + " Pipkin because its settings lock could not be checked. Try again."
+		message = "Couldn't " + action + " Pipkin. Try again."
 	}
 	return commandFlowError{message: message, cause: err}
 }
@@ -65,7 +65,7 @@ type commandFlowError struct {
 func (e commandFlowError) Error() string { return e.message }
 func (e commandFlowError) Unwrap() error { return e.cause }
 
-// Technical details remain available without obscuring the command's outcome.
+// commandPhaseError puts the outcome first and the technical cause after it.
 type commandPhaseError struct {
 	message string
 	cause   error
@@ -87,12 +87,12 @@ func runInstallCommand(out io.Writer, deps installCommandDeps) error {
 	defer lock.Close()
 	staged, err := deps.stage()
 	if err != nil {
-		return commandPhaseError{message: "Couldn't prepare Pipkin for installation. Check the details below and try again.", cause: err}
+		return commandPhaseError{message: "Couldn't prepare Pipkin for installation.", cause: err}
 	}
 	defer staged.close()
 	needsLauncher, err := deps.launcherMissing()
 	if err != nil {
-		return commandPhaseError{message: "Couldn't prepare the Pipkin command. Check the existing launcher and its permissions.", cause: err}
+		return commandPhaseError{message: "Couldn't set up the 'pipkin' command.", cause: err}
 	}
 	_, backup, err := deps.config()
 	if err != nil {
@@ -113,13 +113,13 @@ func runInstallCommand(out io.Writer, deps installCommandDeps) error {
 	var authorization bytes.Buffer
 	actions.authorize = func() { deps.authorize(out, &authorization) }
 	if _, err := deps.activate(staged, actions); err != nil {
-		return installationConfigError(commandPhaseError{message: "Couldn't finish installing Pipkin. Check the details below before trying again.", cause: err}, backup)
+		return installationConfigError(commandPhaseError{message: "Couldn't finish installing Pipkin.", cause: err}, backup)
 	}
 	if _, err := fmt.Fprintf(out, "Pipkin %s is installed and running.\nIt starts automatically when you log in.\n", deps.buildVersion); err != nil {
 		return err
 	}
 	if backup != "" {
-		if _, err := fmt.Fprintf(out, "Previous settings were saved at %s.\n", terminalText(backup)); err != nil {
+		if _, err := fmt.Fprintf(out, "Pipkin's settings were damaged, so they were reset. The old file is at %s.\n", terminalText(backup)); err != nil {
 			return err
 		}
 	}
@@ -194,13 +194,13 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 	}
 	defer staged.close()
 	if _, err := deps.config(); err != nil {
-		return commandPhaseError{message: "Pipkin's settings couldn't be read. Check config.json before trying again.", cause: err}
+		return commandPhaseError{message: "Pipkin's settings couldn't be read.", cause: err}
 	}
 	var authorization bytes.Buffer
 	actions := deps.actions
 	actions.authorize = func() { deps.authorize(out, &authorization) }
 	if _, err := deps.activate(staged, actions); err != nil {
-		return commandPhaseError{message: "Couldn't finish updating Pipkin. Check the details below before trying again.", cause: err}
+		return commandPhaseError{message: "Couldn't finish updating Pipkin.", cause: err}
 	}
 	if _, err := fmt.Fprintf(out, "Pipkin %s is updated and running.\n", strings.TrimPrefix(tag, "v")); err != nil {
 		return err
@@ -208,19 +208,16 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 	if _, err := io.Copy(out, &authorization); err != nil {
 		return err
 	}
-	// Optional display advice must not turn a successful CLI update into a
-	// reported failure, including when its output cannot be delivered.
+	// Firmware advice is optional and never fails an update.
 	_ = deps.advisory(out)
 	return nil
 }
 
-// These hints are for a user to paste; no shell or startup file is modified.
 func shellQuote(value string) string {
 	if utf8.ValidString(value) && strings.IndexFunc(value, func(r rune) bool { return !unicode.IsPrint(r) }) == -1 {
 		return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 	}
-	// zsh and bash both support ANSI-C quoting. Octal byte escapes preserve
-	// unusual filenames without sending their control characters to a terminal.
+	// ANSI-C quoting keeps control characters out of the terminal.
 	var quoted strings.Builder
 	quoted.WriteString("$'")
 	for len(value) > 0 {
@@ -336,8 +333,7 @@ func installPersistentPathFix(goos, shell, home, zDotDir, launcher string, onPAT
 }
 
 func bashLoginStartupFile(home string) string {
-	// Bash reads only the first readable login file. Creating .bash_profile
-	// must not hide settings currently loaded from .bash_login or .profile.
+	// Bash reads only the first login file it finds, so never shadow one.
 	for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
 		path := filepath.Join(home, name)
 		info, err := os.Lstat(path)
@@ -368,8 +364,7 @@ func bashLoginStartupFile(home string) string {
 	return filepath.Join(home, ".bash_profile")
 }
 
-// Only the static foreground permission notice may leave child stdout. This
-// matcher stores no raw child output and accepts arbitrary write boundaries.
+// authorizeNoticeWriter passes only the permission notice through from the child.
 type authorizeNoticeWriter struct {
 	out       io.Writer
 	notice    []byte
@@ -450,7 +445,7 @@ func writeFirmwareAdvisory(out io.Writer, saved func() (string, error), latest f
 	if err != nil || !stableFirmwareVersion.MatchString(tag) || !newerVersion(tag, current) {
 		return nil
 	}
-	_, err = fmt.Fprintf(out, "Saved display firmware: %s. Firmware %s is available.\nTo update the display: %s\n", strings.TrimPrefix(current, "v"), strings.TrimPrefix(tag, "v"), hint("flash"))
+	_, err = fmt.Fprintf(out, "Display firmware %s is available (yours is %s). To install it, run: %s\n", strings.TrimPrefix(tag, "v"), strings.TrimPrefix(current, "v"), hint("flash"))
 	return err
 }
 

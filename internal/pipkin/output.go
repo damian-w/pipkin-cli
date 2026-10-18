@@ -10,8 +10,8 @@ import (
 
 const outputWidth = 79
 
-// writeOutputLine keeps terminal text ASCII and bounded, including continuation
-// lines. The prefix is repeated so wrapped notes keep their indentation.
+// writeOutputLine writes ASCII text wrapped to the terminal width. Wrapped lines
+// are indented to line up after the prefix.
 func writeOutputLine(w io.Writer, prefix, text string) error {
 	prefix = outputASCII(prefix)
 	if len(prefix) >= outputWidth {
@@ -39,6 +39,7 @@ func writeOutputLine(w io.Writer, prefix, text string) error {
 		if text == "" {
 			return nil
 		}
+		prefix = strings.Repeat(" ", len(prefix))
 	}
 }
 
@@ -72,8 +73,7 @@ func (out *providerOutput) row(label, value string, width int) {
 	out.line("  ", fmt.Sprintf("%-*s  %s", width, label, value))
 }
 
-// writeProviders presents the same allowance windows in cached status and fresh
-// usage. It never changes readings, their source times, or the JSON representation.
+// writeProviders renders allowance rows for both status and usage.
 func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 	out := providerOutput{w: w}
 	for index, provider := range []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude"}} {
@@ -97,11 +97,7 @@ func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 		}
 		failed := message != "" || state != "" && state != "available"
 		if !outputHasReading(reading) {
-			if failed {
-				out.line("  ", "No reading available")
-			} else {
-				out.line("  ", "No reading yet")
-			}
+			out.line("  ", "No reading yet")
 			if message != "" {
 				out.line("  ! ", message)
 			}
@@ -195,8 +191,7 @@ func outputProviderMessage(provider, message string) string {
 	for strings.HasPrefix(message, provider+":") {
 		message = strings.TrimSpace(strings.TrimPrefix(message, provider+":"))
 	}
-	// Old cached snapshots wrapped the sentinel into otherwise actionable text.
-	// Keep the remediation while removing the contradictory trailing explanation.
+	// Older snapshots appended this sentinel to actionable messages.
 	return strings.TrimSuffix(message, ": no existing sign-in found")
 }
 

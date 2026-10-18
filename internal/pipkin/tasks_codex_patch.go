@@ -49,8 +49,7 @@ func codexTaskItemPatch(meta *codexTaskMeta, rest []any, patch codexTaskPatch) b
 	return false
 }
 
-// Unsupported changes request a fresh projected snapshot. Patches never rebuild
-// or retain the conversation body, and tool output does not affect task state.
+// Unsupported patches request a fresh snapshot; conversation text is never kept.
 func codexTaskApply(meta *codexTaskMeta, patch codexTaskPatch) (bool, error) {
 	if patch.Op != "add" && patch.Op != "replace" && patch.Op != "remove" {
 		return false, errCodexTaskState

@@ -25,21 +25,20 @@ func runAuthorize(ctx context.Context, goos string, nested bool, out io.Writer, 
 	if err := deps.authorize(ctx, notice); err != nil {
 		return err
 	}
-	if err := writeOutputLine(out, "", "Claude's saved sign-in is ready."); err != nil {
+	if err := writeOutputLine(out, "", "Pipkin can now read Claude's sign-in."); err != nil {
 		return err
 	}
-	// Install and update authorize while holding the installation lock and start
-	// their replacement afterward. A nested restart would deadlock that flow.
+	// Install and update hold the installation lock and start Pipkin themselves.
 	if nested {
 		return nil
 	}
 	pid, err := deps.running()
 	if err != nil {
-		return fmt.Errorf("Claude permission is ready, but Pipkin's running state could not be checked; run 'pipkin restart': %w", err)
+		return fmt.Errorf("Claude's sign-in is ready, but Pipkin couldn't check whether it's running. Run 'pipkin restart': %w", err)
 	}
 	if pid != 0 {
 		if err := deps.restart(); err != nil {
-			return fmt.Errorf("Claude permission is ready, but Pipkin could not restart; run 'pipkin restart' to try again: %w", err)
+			return fmt.Errorf("Claude's sign-in is ready, but Pipkin couldn't restart. Run 'pipkin restart': %w", err)
 		}
 	}
 	return nil

@@ -27,8 +27,7 @@ func codexTaskID(id string) bool {
 	return true
 }
 
-// Catalogs supply candidates, not runtime evidence. Existing desktop ownership
-// must be confirmed before requesting any conversation snapshot.
+// The catalog only suggests threads; the running app must confirm each one.
 func codexTaskCandidates(ctx context.Context, home string, limit int) []string {
 	if ctx.Err() != nil || limit <= 0 {
 		return nil

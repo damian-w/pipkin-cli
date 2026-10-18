@@ -38,8 +38,7 @@ func openCodexNamedPipe(ctx context.Context, name string, validate func(windows.
 	if err != nil {
 		return nil, errors.New("Codex local pipe is unavailable")
 	}
-	// CreateFile returns immediately for an absent/busy pipe. Never use the
-	// server's default WaitNamedPipe timeout, which can exceed collection bounds.
+	// Don't wait on a busy pipe; the default wait can exceed the task budget.
 	handle, err := windows.CreateFile(path, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.READ_CONTROL,
 		0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OVERLAPPED|windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
 	if err != nil {
@@ -54,8 +53,7 @@ func openCodexNamedPipe(ctx context.Context, name string, validate func(windows.
 		windows.CloseHandle(handle)
 		return nil, errors.New("Codex local pipe is unavailable")
 	}
-	// Overlapped handles are registered with Go's native poller by os.NewFile,
-	// which provides cancellation and deadlines without a worker per I/O call.
+	// os.NewFile registers overlapped handles with Go's poller for deadlines.
 	return boundCodexIPCConn(ctx, &codexPipeConn{file})
 }
 
@@ -158,9 +156,8 @@ func validateCodexPipeDACL(handle windows.Handle, currentSID *windows.SID, serve
 			return errors.New("Codex pipe access could not be verified")
 		}
 		access := uint32(ace.Mask)
-		// Windows' default pipe ACL grants Everyone/Anonymous read access.
-		// Only registered clients receive messages, and registration requires
-		// writing initialize. Reject foreign injection or ACL/instance control.
+		// The default pipe ACL lets anyone read, but only registered clients get
+		// messages. Reject pipes that others can write to or reconfigure.
 		// https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights
 		const modify = windows.GENERIC_WRITE | windows.GENERIC_ALL | windows.FILE_WRITE_DATA |
 			windows.FILE_APPEND_DATA | windows.WRITE_DAC | windows.WRITE_OWNER | windows.DELETE |

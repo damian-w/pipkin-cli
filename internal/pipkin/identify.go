@@ -24,11 +24,11 @@ controller cannot be identified reliably from the ESP32 alone.
   --port PORT      Choose a serial port when more than one board is connected.
   --json           Print a complete local report (includes device identifiers).
   --issue          Print a GitHub issue draft with a physical-board checklist.
-  --board PROFILE  Confirm a profile after checking the physical board and
-                   remember it for this ESP32's MAC address for future flashing.
+  --board PROFILE  Confirm a profile after checking the physical board, and
+                   remember it for this ESP32's MAC address.
 
 Review and complete the --issue draft before submitting it. No issue is sent
-automatically. The draft omits MAC addresses, USB serial numbers and local paths.
+automatically. The draft omits MAC addresses, USB serial numbers and paths.
 `
 
 type identifyOptions struct {
@@ -175,7 +175,7 @@ func buildIdentifyReport(port string, usb identifyUSBInfo, probe flashProbe, ide
 }
 
 func runIdentify(ctx context.Context, options identifyOptions, output, progress io.Writer, actions identifyActions) (result error) {
-	session, err := openBoardSession(actions.boardActions, "board inspection")
+	session, err := openBoardSession(actions.boardActions)
 	if err != nil {
 		return err
 	}

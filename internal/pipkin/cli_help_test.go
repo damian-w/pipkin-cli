@@ -16,9 +16,13 @@ func TestCLIMenuSeparatesEverydayCommands(t *testing.T) {
 		if strings.Contains(menu, "identify") || strings.Contains(menu, "--json") || !strings.Contains(menu, "More: tasks, start, stop, install,") {
 			t.Fatalf("incorrect menu grouping on %s: %s", goos, menu)
 		}
-		for _, line := range strings.Split(menu, "\n") {
-			if len(line) > 80 {
-				t.Fatalf("menu wraps: %q", line)
+		text := menu
+		for _, command := range cliCommands("test", "", "", goos, io.Discard) {
+			text += "\n" + command.syntax + "\n" + command.summary + "\n" + command.details
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if len(line) > outputWidth {
+				t.Fatalf("help wraps: %q", line)
 			}
 		}
 	}

@@ -36,11 +36,8 @@ func runFlashProcessInJob(command *exec.Cmd, terminateJob func(windows.Handle, u
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
 		return fmt.Errorf("could not contain flashing-tool processes: %w", err)
 	}
-	// A PyInstaller child can acquire the serial port. Start its parent suspended
-	// so it cannot create a child before assignment to this private, non-breakaway
-	// job. A separate process group disables console Ctrl-C for the tool and its
-	// descendants; cancellation and deadlines still terminate the whole job.
-	// KILL_ON_JOB_CLOSE also covers an explicit termination failure.
+	// Start suspended so the tool's PyInstaller child can't escape the job, and in
+	// its own process group so console Ctrl-C can't interrupt a write.
 	// https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
 	command.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,

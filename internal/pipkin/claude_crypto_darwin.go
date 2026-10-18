@@ -23,7 +23,7 @@ func claudeDecryptor(ctx context.Context, dir string) (func([]byte) ([]byte, err
 type claudePermissionError struct{ cause error }
 
 func (e *claudePermissionError) Error() string {
-	return "macOS hasn't let Pipkin read Claude's sign-in. Run 'pipkin authorize', then 'pipkin restart'."
+	return "macOS hasn't let Pipkin read Claude's sign-in. Run 'pipkin authorize'."
 }
 
 func (e *claudePermissionError) Unwrap() error { return e.cause }
