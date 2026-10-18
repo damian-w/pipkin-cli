@@ -792,9 +792,6 @@ func TestCodexTaskLive(t *testing.T) {
 		dial:       openCodexDesktopIPC,
 		candidates: func(ctx context.Context) []string { return codexTaskCandidates(ctx, home, codexTaskMaxCandidates) },
 		budget:     codexTaskBudget,
-		diagnostic: func(event codexTaskDiagnostic) {
-			t.Logf("phase=%s method=%s bytes=%d", event.Phase, event.Method, event.Bytes)
-		},
 	})
 	t.Logf("coverage=%s tasks=%d", result.Coverage, len(result.Tasks))
 	if result.Coverage == "unavailable" {

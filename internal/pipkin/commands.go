@@ -17,10 +17,16 @@ import (
 
 var repository = envOr("PIPKIN_REPOSITORY", "damian-w/pipkin-cli")
 
+func lockInstallation() (io.Closer, error) { return acquireFileLock(installationLockPath()) }
+
+func authorizeReplacement(noticeOut, warningOut io.Writer) {
+	authorizeInstalledHelperWithNoticeFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, noticeOut, warningOut)
+}
+
 func installCommand() error {
 	return runInstallCommand(os.Stdout, installCommandDeps{
 		buildVersion: version, goos: runtime.GOOS,
-		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
+		lock: lockInstallation,
 		stage: func() (*stagedBinaries, error) {
 			source, err := os.Executable()
 			if err != nil {
@@ -34,10 +40,8 @@ func installCommand() error {
 		launcherMissing: launcherMissing, config: initializedInstallConfig,
 		actions: helperInstallationActions(), activate: activateBinaries,
 		configure: installLauncher, undo: removeLauncher,
-		authorize: func(noticeOut, warningOut io.Writer) {
-			authorizeInstalledHelperWithNoticeFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, noticeOut, warningOut)
-		},
-		hint: commandHint, pathFix: installPathFix(runtime.GOOS, launcherPath(), onPath(filepath.Dir(launcherPath()))),
+		authorize: authorizeReplacement,
+		hint:      commandHint, pathFix: installPathFix(runtime.GOOS, launcherPath(), onPath(filepath.Dir(launcherPath()))),
 		permissionHint: serialPermissionHint,
 	})
 }
@@ -209,15 +213,13 @@ func newerVersion(candidate, current string) bool {
 func updateCommand() error {
 	return runUpdateCommand(os.Stdout, updateCommandDeps{
 		buildVersion: version, latest: latestTag,
-		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
+		lock: lockInstallation,
 		stage: func(tag string) (*stagedBinaries, error) {
 			release := fmt.Sprintf("https://github.com/%s/releases/download/%s", repository, tag)
 			return stageReleaseBinaries(release, filepath.Dir(installedBinary()), runtime.GOOS, runtime.GOARCH)
 		},
 		config: initializedConfig, actions: helperInstallationActions(), activate: activateBinaries,
-		authorize: func(noticeOut, warningOut io.Writer) {
-			authorizeInstalledHelperWithNoticeFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, noticeOut, warningOut)
-		},
+		authorize: authorizeReplacement,
 		advisory: func(out io.Writer) error {
 			return writeFirmwareAdvisory(out, cachedDisplayFirmware, latestFirmwareAdvisoryTag, commandHint)
 		},
@@ -227,7 +229,7 @@ func updateCommand() error {
 func uninstallCommand() error {
 	return runUninstallCommand(os.Stdout, uninstallDependencies{
 		goos: runtime.GOOS, target: installationRemovalTarget,
-		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
+		lock: lockInstallation,
 		stop: stopHelper, startup: removeAutostart, launcher: removeLauncher, remove: removeInstallation,
 	})
 }

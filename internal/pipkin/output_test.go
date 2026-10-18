@@ -77,7 +77,6 @@ func TestOutputFreshnessSignInAndMissingReadings(t *testing.T) {
 		{name: "retained skew", state: "unavailable", reading: &Reading{Observed: outputTestNow + 1, SessionNoCap: true}, want: []string{"Last known reading (age unknown)"}},
 		{name: "ordinary sign out", state: "signed_out", want: []string{"Not signed in"}, absent: []string{"!", "Session", "Weekly"}},
 		{name: "ordinary sign out message", state: "signed_out", message: "not signed in", want: []string{"Not signed in"}, absent: []string{"!", "no existing"}},
-		{name: "legacy ordinary sign out", state: "signed_out", message: "no existing sign-in found", want: []string{"Not signed in"}, absent: []string{"!", "no existing"}},
 		{name: "expired", state: "signed_out", message: "Sign-in expired; open Codex to renew it", reading: &Reading{SessionNoCap: true}, want: []string{"Not signed in", "! Sign-in expired; open Codex to renew it"}, absent: []string{"Session", "Last known"}},
 		{name: "account mismatch", state: "signed_out", message: "The active account changed; sign in again", want: []string{"! The active account changed; sign in again"}},
 		{name: "nil reading", state: "available", want: []string{"No reading yet"}},
@@ -184,46 +183,6 @@ func TestOutputDurationsAndWindows(t *testing.T) {
 		if got := outputWindow(&Window{Used: c.used}, outputTestNow); got != c.want {
 			t.Fatalf("percentage rounding for used=%d: got %q, want %q", c.used, got, c.want)
 		}
-	}
-}
-
-func TestOutputLegacyCachedProviderMessages(t *testing.T) {
-	for _, c := range []struct {
-		name, provider, state, message, want string
-		calm                                 bool
-	}{
-		{"ordinary Claude", "claude", "signed_out", "Claude: no existing sign-in found", "Not signed in", true},
-		{"absent Codex app sign-in", "codex", "signed_out", "Codex app sign-in is absent: no existing sign-in found", "Not signed in", true},
-		{"absent Codex keyring sign-in", "codex", "signed_out", "Codex keyring sign-in is absent: no existing sign-in found", "Not signed in", true},
-		{"missing Codex sign-in", "codex", "signed_out", "no readable Codex app sign-in found: no existing sign-in found", "Not signed in", true},
-		{"expired Claude", "claude", "signed_out", "Claude: Claude sign-in expired; open Claude to renew it: no existing sign-in found", "! Claude sign-in expired; open Claude to renew it", false},
-		{"mismatched Claude account", "claude", "signed_out", "Claude: Claude Desktop login no longer matches its active account: no existing sign-in found", "! Claude Desktop login no longer matches its active account", false},
-		{"in-memory Codex sign-in", "codex", "signed_out", "Codex uses an in-memory sign-in: no existing sign-in found", "! Codex uses an in-memory sign-in", false},
-		{"unavailable Codex", "codex", "unavailable", "Codex: Can't read usage; check your connection", "! Can't read usage; check your connection", false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			s := Status{States: map[string]string{c.provider: c.state}}
-			if c.provider == "codex" {
-				s.CodexError = c.message
-			} else {
-				s.ClaudeError = c.message
-			}
-			before, _ := json.Marshal(s)
-			var got bytes.Buffer
-			if err := writeProviders(&got, s, outputTestNow, false); err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(got.String(), c.want) || strings.Contains(got.String(), "no existing sign-in found") || strings.Contains(got.String(), "! Codex:") || strings.Contains(got.String(), "! Claude:") {
-				t.Fatalf("legacy message was not normalized: %s", got.String())
-			}
-			if c.calm && strings.Contains(got.String(), "!") {
-				t.Fatalf("ordinary sign-out gained an error marker: %s", got.String())
-			}
-			after, _ := json.Marshal(s)
-			if !bytes.Equal(before, after) {
-				t.Fatal("text normalization changed cached JSON")
-			}
-		})
 	}
 }
 

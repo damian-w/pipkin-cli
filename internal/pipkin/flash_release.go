@@ -163,6 +163,32 @@ func (s firmwareSource) get(ctx context.Context, url string, limit int64) ([]byt
 	return data.Bytes(), err
 }
 
+type firmwareReleaseInfo struct {
+	Tag        string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+	Assets     []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// release reads one GitHub release and accepts only a published stable version.
+func (s firmwareSource) release(ctx context.Context, endpoint string) (firmwareReleaseInfo, error) {
+	var release firmwareReleaseInfo
+	metadata, err := s.get(ctx, endpoint, 1<<20)
+	if err != nil {
+		return release, err
+	}
+	if err := json.Unmarshal(metadata, &release); err != nil {
+		return release, errors.New("invalid firmware release metadata")
+	}
+	if release.Draft || release.Prerelease || !strings.HasPrefix(release.Tag, "v") || !stableFirmwareVersion.MatchString(release.Tag) {
+		return release, errors.New("firmware release is not the requested published stable version")
+	}
+	return release, nil
+}
+
 func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, parent string) (_ *firmwareRelease, err error) {
 	endpoint := s.api + "/releases/latest"
 	if selectedVersion != "" {
@@ -171,23 +197,11 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, 
 		}
 		endpoint = s.api + "/releases/tags/v" + strings.TrimPrefix(selectedVersion, "v")
 	}
-	metadata, err := s.get(ctx, endpoint, 1<<20)
+	release, err := s.release(ctx, endpoint)
 	if err != nil {
 		return nil, err
 	}
-	var release struct {
-		Tag        string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-		Assets     []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := json.Unmarshal(metadata, &release); err != nil {
-		return nil, errors.New("invalid firmware release metadata")
-	}
-	if release.Draft || release.Prerelease || !strings.HasPrefix(release.Tag, "v") || !stableFirmwareVersion.MatchString(release.Tag) || selectedVersion != "" && release.Tag != "v"+strings.TrimPrefix(selectedVersion, "v") {
+	if selectedVersion != "" && release.Tag != "v"+strings.TrimPrefix(selectedVersion, "v") {
 		return nil, errors.New("firmware release is not the requested published stable version")
 	}
 	base := s.downloads + "/" + release.Tag + "/"

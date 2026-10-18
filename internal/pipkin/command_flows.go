@@ -284,20 +284,8 @@ func installPathFix(goos, launcher string, onPATH bool) string {
 
 func latestFirmwareAdvisoryTag(ctx context.Context) (string, error) {
 	source := publicFirmwareSource()
-	data, err := source.get(ctx, source.api+"/releases/latest", 1<<20)
-	if err != nil {
-		return "", err
-	}
-	var release struct {
-		Tag        string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-	}
-	if json.Unmarshal(data, &release) != nil || release.Draft || release.Prerelease ||
-		!strings.HasPrefix(release.Tag, "v") || !stableFirmwareVersion.MatchString(release.Tag) {
-		return "", errors.New("no stable firmware release found")
-	}
-	return release.Tag, nil
+	release, err := source.release(ctx, source.api+"/releases/latest")
+	return release.Tag, err
 }
 
 func writeFirmwareAdvisory(out io.Writer, saved func() (string, error), latest func(context.Context) (string, error), hint func(...string) string) error {

@@ -3,46 +3,36 @@
 Pipkin reads subscription usage from the Codex and Claude accounts already
 signed in on your computer. It does not require their CLIs or a separate login.
 Provider compatibility can change when the desktop apps or services change.
-Unavailable data is shown as unknown, never as a full allowance.
-Claude sessions with zero utilization and an explicitly null reset have not
-started yet; they start with the first message and have no reset countdown.
+Unavailable data is shown as unknown, never as a full allowance. A Claude session
+that hasn't started yet shows as starting with your first message, with no
+countdown.
 
 ## Existing sign-ins
 
-On Linux and Windows, Claude prefers the account selected in Claude Desktop.
-Pipkin reads Desktop's saved access token and account/organization selection,
-including its selection cookie when available, and decrypts encrypted data in
-memory. An existing Claude Code sign-in can be used when Desktop has no saved
-sign-in. Codex uses its existing
-local subscription sign-in from its configured auth file or OS credential store.
-API keys are not used for subscription readings.
+For Claude, Pipkin uses the account selected in the Claude desktop app. It reads
+the app's saved sign-in and decrypts it in memory. If the desktop app isn't signed
+in, Pipkin can use an existing Claude Code sign-in instead. On a Mac, Pipkin tries
+the Claude Code sign-in first to avoid an extra Keychain prompt, but only when
+Claude confirms it belongs to the same account as the desktop app.
 
-On macOS, Pipkin first tries an accessible Claude Code sign-in to avoid a separate
-Desktop Keychain permission request. When Desktop is signed in, Claude must verify
-that Code's login belongs to the same account. Readings then use Code's organization.
-If Code's login is unavailable or cannot be verified, Pipkin uses Desktop as before.
+For Codex, Pipkin uses the Codex app's saved subscription sign-in, from its auth
+file or your system's credential store. API keys aren't used.
 
-On Windows, a running Claude Desktop can exclusively lock its cookie database.
-When its active-organization cookie is missing or inaccessible, Pipkin can infer
-an organization only if its saved Desktop token caches contain exactly one
-organization for the selected account. Expired entries and deleted-token markers
-still count when checking for ambiguity. Pipkin verifies the token's account and
-organization with Claude before reporting usage and rechecks saved Desktop state.
-Multiple cached organizations remain unavailable without a readable selection
-cookie. This fallback verifies the credential's identity; it cannot detect a GUI
-organization switch that Claude has not yet saved in its token caches.
+On Windows, a running Claude app can lock the file that records which
+organization you've selected. Pipkin then uses the organization in Claude's saved
+sign-in, but only when your account has exactly one, and checks it with Claude
+before showing usage. If you belong to several organizations, usage is
+unavailable until the file can be read. If you've just switched organizations,
+Pipkin may show the previous one until Claude saves the change.
 
-On macOS, installation may ask for permission to read the `Claude Safe Storage`
-Keychain item, used to decrypt Claude Desktop's saved data. CLI updates started
-by version 1.2.0 or later also check this permission from the newly installed
-executable before restarting the background helper.
-The dialog can ask for your Mac login password. Choose **Always Allow** for
-background access. If access is blocked or you cancel, run `pipkin authorize`;
-it restarts Pipkin afterwards. Updates started by an older CLI may also need
-`pipkin restart`.
-Routine background reads do not open permission dialogs. Linux credential-store
-access requires an already unlocked Secret Service store; basic storage and auth
-files do not. Windows uses the current user's credential storage.
+On a Mac, installing Pipkin may ask for permission to read the
+`Claude Safe Storage` Keychain item, which unlocks Claude's saved data. Enter your
+Mac login password and choose **Always Allow** so Pipkin can read it in the
+background. If you blocked it or cancelled, run `pipkin authorize`. Updates check
+this permission again before restarting Pipkin; updates started from a version
+before 1.2.0 may also need `pipkin restart`. Background reads never open
+permission prompts. On Linux, Pipkin can read the credential store only when it's
+already unlocked. Windows uses your user account's credential storage.
 
 The provider apps manage their own sign-ins. If a session expires, open the
 provider's app to renew it. Pipkin does not use refresh tokens or refresh, replace,
@@ -131,11 +121,10 @@ firmware update to appear on the physical display. See the [display protocol](pr
 Pipkin supports macOS, Linux and Windows on AMD64 and ARM64. Automated tests run
 on all three operating systems.
 
-Locked or unsupported credential stores are reported as unavailable. Linux
-supports an unlocked Secret Service store or Electron basic storage; KWallet-only
-storage is unsupported. Codex's experimental encrypted secret backend and
-app-bound Electron encryption are also unsupported.
+Locked or unsupported credential stores show as unavailable. On Linux, Pipkin
+supports an unlocked Secret Service store or Electron's basic storage, but not
+KWallet on its own. Codex's experimental encrypted storage and Electron's
+app-bound encryption aren't supported.
 
-Current macOS builds are unsigned or ad-hoc signed. Keychain may ask for a new
-grant after an update; persistent permission across releases requires a stable
-Developer ID signature.
+Pipkin's Mac builds aren't signed with an Apple Developer ID yet, so the Keychain
+may ask for permission again after an update.

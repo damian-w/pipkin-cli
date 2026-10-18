@@ -89,7 +89,7 @@ func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 			out.line("", "")
 		}
 		reading := s.Readings[provider.key]
-		message := outputProviderMessage(provider.name, s.providerError(provider.key))
+		message := outputProviderMessage(s.providerError(provider.key))
 		state := s.States[provider.key]
 		heading := provider.name
 		if detailed && reading != nil && strings.TrimSpace(reading.Plan) != "" && state != "signed_out" {
@@ -188,19 +188,14 @@ func outputCalmSignOut(message string) bool {
 	message = strings.ToLower(strings.TrimSpace(message))
 	message = strings.TrimSuffix(message, ".")
 	switch message {
-	case "", "not signed in", "no existing sign-in found", "codex keyring sign-in is absent", "codex app sign-in is absent", "no readable codex app sign-in found":
+	case "", "not signed in":
 		return true
 	}
 	return false
 }
 
-func outputProviderMessage(provider, message string) string {
-	message = strings.TrimSpace(outputASCII(message))
-	for strings.HasPrefix(message, provider+":") {
-		message = strings.TrimSpace(strings.TrimPrefix(message, provider+":"))
-	}
-	// Older snapshots appended this sentinel to actionable messages.
-	return strings.TrimSuffix(message, ": no existing sign-in found")
+func outputProviderMessage(message string) string {
+	return strings.TrimSpace(outputASCII(message))
 }
 
 func outputHasReading(reading *Reading) bool {

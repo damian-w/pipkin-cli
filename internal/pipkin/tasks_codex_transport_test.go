@@ -18,6 +18,14 @@ func TestCodexTransportHome(t *testing.T) {
 	if got, err := codexTaskHome(); err != nil || got != filepath.Join(home, "codex") {
 		t.Fatalf("absolute home: %q, %v", got, err)
 	}
+	os.Unsetenv("CODEX_HOME") // t.Setenv restores it afterwards.
+	user, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := codexTaskHome(); err != nil || got != filepath.Join(user, ".codex") {
+		t.Fatalf("default home: %q, %v", got, err)
+	}
 }
 
 func TestCodexTransportGUIExecutable(t *testing.T) {
@@ -42,26 +50,5 @@ func TestCodexTransportGUIExecutable(t *testing.T) {
 		if got := codexGUIExecutable(c.path, c.goos); got != c.want {
 			t.Errorf("GUI identity %q (%s): %t, want %t", c.path, c.goos, got, c.want)
 		}
-	}
-}
-
-func TestCodexTransportUnsetHomeUsesUserHome(t *testing.T) {
-	prior, set := os.LookupEnv("CODEX_HOME")
-	if err := os.Unsetenv("CODEX_HOME"); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if set {
-			os.Setenv("CODEX_HOME", prior)
-		} else {
-			os.Unsetenv("CODEX_HOME")
-		}
-	})
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := codexTaskHome(); err != nil || got != filepath.Join(home, ".codex") {
-		t.Fatalf("default home: %q, %v", got, err)
 	}
 }

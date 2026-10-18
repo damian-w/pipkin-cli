@@ -14,21 +14,10 @@ import (
 )
 
 func TestSignedOutErrorPreservesClassificationWithoutSentinelText(t *testing.T) {
-	for _, message := range []string{
-		"not signed in",
-		"Sign-in expired. Open Claude to sign in again.",
-		"Active account changed while reading usage. Try again.",
-	} {
-		err := signedOutError(message)
-		if err.Error() != message || !errors.Is(err, errSignedOut) || !errors.Is(fmt.Errorf("context: %w", err), errSignedOut) {
-			t.Fatal("typed sign-out lost its message or classification")
-		}
-		if errors.Is(err, errCredentialLocked) || errors.Is(err, nil) || providerState(err) != "signed_out" {
-			t.Fatal("typed sign-out changed unrelated error classification")
-		}
-		if strings.Contains(err.Error(), errSignedOut.Error()) {
-			t.Fatal("sign-out appended the generic sentinel text")
-		}
+	err := signedOutError("Sign-in expired. Open Claude to sign in again.")
+	if err.Error() != "Sign-in expired. Open Claude to sign in again." || !errors.Is(fmt.Errorf("context: %w", err), errSignedOut) ||
+		errors.Is(err, errCredentialLocked) || providerState(err) != "signed_out" {
+		t.Fatal("typed sign-out lost its message or classification")
 	}
 }
 

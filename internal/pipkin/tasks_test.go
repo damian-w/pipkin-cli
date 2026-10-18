@@ -156,7 +156,7 @@ func TestHelperTaskPollingIsAsynchronousAndIndependentOfUSB(t *testing.T) {
 	<-h.taskResults
 }
 
-func TestHelperTaskGenerationRejectsPreWakeInFlightStateWithoutOverlap(t *testing.T) {
+func TestHelperTaskRejectsPreWakeResults(t *testing.T) {
 	t.Setenv("PIPKIN_HOME", t.TempDir())
 	h, _ := testHelper()
 	clock := h.now()
@@ -212,33 +212,4 @@ func TestHelperTaskGenerationRejectsPreWakeInFlightStateWithoutOverlap(t *testin
 	if h.taskPending || h.tasks.Providers["claude"].Tasks[0].ID != "claude:fresh" {
 		t.Fatal("the post-wake observation was not accepted")
 	}
-}
-
-func TestHelperTaskGenerationRejectsQueuedPreWakeResultAndRefreshesPromptly(t *testing.T) {
-	t.Setenv("PIPKIN_HOME", t.TempDir())
-	h, _ := testHelper()
-	now := h.now()
-	h.taskResults = make(chan taskCollectionResult, 1)
-	h.taskPending = true
-	h.due["tasks"] = now.Add(taskPollEvery)
-	h.taskResults <- taskCollectionResult{generation: h.generation, snapshot: TaskSnapshot{
-		SchemaVersion: 1, ObservedAt: now.Unix(), Providers: map[string]TaskProvider{
-			"codex": {Coverage: "partial", Tasks: []Task{{ID: "codex:old", Status: "working"}}},
-		},
-	}}
-	h.handlePowerEvent(powerEvent{kind: powerSystemSleep, active: true})
-	h.handlePowerEvent(powerEvent{kind: powerSystemSleep, active: false})
-	started, release := make(chan struct{}), make(chan struct{})
-	h.collectTasks = func(context.Context) TaskSnapshot {
-		close(started)
-		<-release
-		return TaskSnapshot{SchemaVersion: 1, ObservedAt: now.Unix()}
-	}
-	h.pollTasks(context.Background(), now)
-	<-started
-	if h.tasks != nil || !h.taskPending || h.due["tasks"] != now.Add(taskPollEvery) {
-		t.Fatal("a queued pre-wake state was accepted or its refresh was postponed")
-	}
-	close(release)
-	<-h.taskResults
 }

@@ -8,23 +8,19 @@ Earlier firmware releases supported CLI 1.1.0 or later.
 
 ## Supported board
 
-The current firmware uses one profile for **ESP32 CYD 2.8-inch touch boards with
-4 MB flash**. Equivalently wired ESP32-S and WROOM boards use the same profile;
-their printed model labels do not need to match exactly. First installation,
-settings-preserving updates, USB reset and display/touch operation have been tested
-on a physical CYD board on macOS.
-Check the PCB model and components against the
+The current firmware supports **ESP32 CYD 2.8-inch touch boards with 4 MB
+flash**, including equivalently wired ESP32-S and WROOM versions; the printed
+model label doesn't need to match. It has been tested on a physical CYD board on
+macOS: first installation, updates that keep settings, USB reset, and the screen
+and touch. What matters is the board's wiring and its display and touch parts,
+not the seller's product name. Compare yours with the
 [board profile](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profile).
-The firmware's current wiring and display/touch drivers determine compatibility,
-rather than a seller's product name.
 
-A USB serial adapter or an ESP32 chip does not prove which screen is attached. The
-CLI checks the ESP chip and flash compatibility, but cannot identify the LCD or
-touch controller. Confirm that it is the intended ESP32 CYD 2.8-inch touch board
-before flashing. If running firmware does not respond, the CLI checks the stored
-application descriptor for a Pipkin version. A recognized version is labelled
-`stored; not responding`; it does not prove that firmware is running. Otherwise,
-the board is shown as not identified as Pipkin.
+Pipkin can check the ESP32 chip and its flash, but not which screen is attached,
+so make sure it's a CYD 2.8-inch touch board before flashing. If the display's
+firmware doesn't respond, Pipkin looks for a Pipkin version stored on the board
+and shows it as "installed but not responding". Otherwise the board is shown as
+not identified as Pipkin.
 
 ## Flash a release
 
@@ -34,10 +30,9 @@ Use a USB data cable, connect one supported board, and open a terminal:
 pipkin flash
 ```
 
-The release must include `firmware.json`, `SHA256SUMS` and the flash images. Older
-releases without these artifacts cannot be installed by this command. New firmware
-releases stay drafts until hardware qualification; drafts and prereleases are not
-selected, and the CLI does not build unpublished source as a fallback.
+Pipkin installs only published stable firmware releases. New releases stay
+drafts until they've been tested on hardware, and older releases without a
+firmware manifest (`firmware.json`) can't be installed this way.
 
 The CLI obtains the stable release's flash manifest, downloads the required images
 and verifies their checksums. It checks the serial connection, current firmware
@@ -115,19 +110,19 @@ command before writing; reinstalling does not bypass those checks.
 
 ## Flashing tool and platform support
 
-The CLI automatically downloads and privately caches Espressif's official
-**esptool v5.4.0** executable and verifies the download. You do not need to install
-Python or ESP-IDF. The tool is used only when you run `pipkin flash` or
-`pipkin identify`; it does not run as part of the background helper. GitHub requests contain no usage readings or
-provider credentials, and Pipkin has no telemetry.
+Pipkin downloads Espressif's official **esptool v5.4.0**, checks the download and
+keeps a private copy, so you don't need to install Python or ESP-IDF. The tool
+runs only when you use `pipkin flash` or `pipkin identify`, never in the
+background. GitHub requests carry no usage readings or sign-ins, and Pipkin has no
+telemetry.
 
 See [flashing-tool provenance and licences](esptool.md) for the pinned downloads,
 cache checks and the tool's third-party notices.
 
-The CLI supports macOS, Linux and Windows on AMD64 and ARM64. Flashing on Windows
-ARM64 uses the official AMD64 tool through Windows 11's x64 emulation, and still
-needs hardware qualification. The qualified board catalog records the completed
-physical checks; USB flashing still requires qualification on the other platforms.
+Pipkin runs on macOS, Linux and Windows, on both Intel/AMD and ARM. On Windows ARM,
+flashing runs the official Intel/AMD tool through Windows 11's emulation. Flashing
+has been tested with a physical board on macOS; the other systems haven't been
+yet.
 
 Building and flashing your own firmware with ESP-IDF remains available in the
 [source-build guide](https://github.com/damian-w/pipkin/blob/main/docs/development.md#build-firmware-from-source).

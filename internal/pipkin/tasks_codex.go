@@ -12,7 +12,6 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -25,17 +24,10 @@ const (
 	codexTaskMaxPending    = 4
 )
 
-type codexTaskDiagnostic struct {
-	Phase  string
-	Method string
-	Bytes  int
-}
-
 type codexTaskOptions struct {
 	dial       func(context.Context) (net.Conn, error)
 	candidates func(context.Context) []string
 	budget     time.Duration
-	diagnostic func(codexTaskDiagnostic)
 }
 
 type codexTaskMessage struct {
@@ -96,8 +88,6 @@ type codexTaskObserver struct {
 	lookedUp    int
 	streams     map[string]*codexTaskStream
 	resyncs     int
-	diagnostic  func(codexTaskDiagnostic)
-	diagnostics int
 }
 
 func collectCodexTasks(ctx context.Context) TaskProvider {
@@ -129,7 +119,7 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 	}
 	deadline, _ := ctx.Deadline()
 	observer := codexTaskObserver{ctx: ctx, deadline: deadline, catalog: map[string]bool{}, queued: map[string]bool{},
-		lookups: map[string]codexTaskLookup{}, streams: map[string]*codexTaskStream{}, diagnostic: opts.diagnostic}
+		lookups: map[string]codexTaskLookup{}, streams: map[string]*codexTaskStream{}}
 	if opts.candidates != nil {
 		catalogCtx, done := context.WithTimeout(ctx, 400*time.Millisecond)
 		for _, id := range opts.candidates(catalogCtx) {
@@ -145,13 +135,10 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 		return TaskProvider{Coverage: "unavailable"}
 	}
 	observer.prefix = hex.EncodeToString(nonce[:])
-	observer.trace("dial_start", "", 0)
 	conn, err := opts.dial(ctx)
 	if err != nil {
-		observer.trace("dial_failed", "", 0)
 		return TaskProvider{Coverage: "unavailable"}
 	}
-	observer.trace("dial_ready", "", 0)
 	observer.conn = conn
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
@@ -196,10 +183,8 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 		}
 		n, readErr := conn.Read(chunk)
 		if n > 0 {
-			observer.trace("read_data", "", n)
 			received += n
 			if received > codexTaskMaxBytes {
-				observer.trace("total_byte_limit", "", received)
 				failed = true
 				break
 			}
@@ -207,7 +192,6 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 			for len(buffer) >= 4 {
 				size := int(binary.LittleEndian.Uint32(buffer[:4]))
 				if size <= 0 || size > codexTaskMaxFrame || frames >= 4096 {
-					observer.trace("frame_limit", "", size)
 					failed = true
 					break
 				}
@@ -216,7 +200,6 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 				}
 				frames++
 				if observer.receive(buffer[4:size+4]) != nil {
-					observer.trace("receive_failed", "", size)
 					failed = true
 					break
 				}
@@ -231,7 +214,6 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 				break
 			}
 			if !codexTaskReadTimedOut(readErr) {
-				observer.trace(codexTaskReadFailure(readErr), "", n)
 				failed = true
 				break
 			}
@@ -239,10 +221,8 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 	}
 	// Closing the connection also ends its stream subscriptions.
 	if !failed && observer.initialized {
-		observer.trace("complete_partial", "", 0)
 		return observer.result()
 	}
-	observer.trace("complete_unavailable", "", 0)
 	return TaskProvider{Coverage: "unavailable"}
 }
 
@@ -281,8 +261,6 @@ func (o *codexTaskObserver) enqueue(id string, priority bool) {
 }
 
 func (o *codexTaskObserver) send(message map[string]any) error {
-	method, _ := message["method"].(string)
-	o.trace("send", method, 0)
 	body, err := json.Marshal(message)
 	if err != nil {
 		return errCodexTaskState
@@ -296,7 +274,6 @@ func (o *codexTaskObserver) send(message map[string]any) error {
 	for len(frame) > 0 {
 		n, err := o.conn.Write(frame)
 		if err != nil {
-			o.trace("write_failed", method, n)
 			return err
 		}
 		if n == 0 {
@@ -319,15 +296,12 @@ func (o *codexTaskObserver) follow(id string, value bool) error {
 func (o *codexTaskObserver) receive(frame []byte) error {
 	var message codexTaskMessage
 	if json.Unmarshal(frame, &message) != nil || message.Type == "" || len(message.RequestID) > 128 {
-		o.trace("frame_invalid", "", len(frame))
 		return errCodexTaskState
 	}
-	o.trace("receive", message.Method, len(frame))
 	requestID := message.RequestID
 	switch message.Type {
 	case "client-discovery-request":
 		if requestID == "" {
-			o.trace("discovery_id_empty", "", 0)
 			return errCodexTaskState
 		}
 		return o.send(map[string]any{"type": "client-discovery-response", "requestId": requestID,
@@ -335,10 +309,8 @@ func (o *codexTaskObserver) receive(frame []byte) error {
 	case "response":
 		if requestID == o.prefix {
 			if message.Method != "initialize" || message.ResultType != "success" {
-				o.trace("initialize_rejected", message.Method, 0)
 				return errCodexTaskState
 			}
-			o.trace("initialized", message.Method, 0)
 			o.initialized = true
 			return nil
 		}
@@ -358,11 +330,9 @@ func (o *codexTaskObserver) receive(frame []byte) error {
 		}
 		var params codexTaskParams
 		if json.Unmarshal(message.Params, &params) != nil {
-			o.trace("broadcast_params_invalid", message.Method, 0)
 			return errCodexTaskState
 		}
 		if message.Method == "ipc-connection-reset" {
-			o.trace("source_reset", message.Method, 0)
 			return errCodexTaskState
 		}
 		if message.Method == "client-status-changed" && params.Status == "disconnected" {
@@ -378,7 +348,6 @@ func (o *codexTaskObserver) receive(frame []byte) error {
 		}
 		if message.Method == "thread-stream-following-changed" && params.Following || message.Method == "thread-stream-following-status-requested" {
 			if message.Version != 1 {
-				o.trace("following_version_invalid", message.Method, 0)
 				return errCodexTaskState
 			}
 			o.enqueue(params.ConversationID, true)
@@ -389,7 +358,6 @@ func (o *codexTaskObserver) receive(frame []byte) error {
 		}
 		if message.Method == "thread-stream-state-changed" {
 			if message.Version != 11 {
-				o.trace("stream_version_invalid", message.Method, 0)
 				return errCodexTaskState
 			}
 			return o.stream(message, params)
@@ -484,47 +452,6 @@ func (o *codexTaskObserver) result() TaskProvider {
 		result.Tasks = append(result.Tasks, task)
 	}
 	return normalizeTaskProvider(result)
-}
-
-// trace feeds the opt-in live test; it never sees IDs, payloads or paths.
-func (o *codexTaskObserver) trace(phase, method string, size int) {
-	if o.diagnostic == nil || o.diagnostics >= 80 {
-		return
-	}
-	switch method {
-	case "", "initialize", "thread-owner-discovery", "thread-stream-following-changed", "thread-stream-following-status-requested", "thread-stream-state-changed", "thread-read-state-changed", "client-status-changed", "ipc-connection-reset":
-	default:
-		method = "other"
-	}
-	o.diagnostics++
-	o.diagnostic(codexTaskDiagnostic{Phase: phase, Method: method, Bytes: size})
-}
-
-func codexTaskReadFailure(err error) string {
-	if errors.Is(err, io.EOF) {
-		return "read_eof"
-	}
-	if errors.Is(err, net.ErrClosed) {
-		return "read_closed"
-	}
-	var errno syscall.Errno
-	if runtime.GOOS == "windows" && errors.As(err, &errno) {
-		switch uintptr(errno) {
-		case 234:
-			return "read_more_data"
-		case 109:
-			return "read_broken_pipe"
-		case 232:
-			return "read_no_data"
-		case 233:
-			return "read_pipe_not_connected"
-		case 995:
-			return "read_aborted"
-		case 5:
-			return "read_access_denied"
-		}
-	}
-	return "read_failed"
 }
 
 func codexTaskReadTimedOut(err error) bool {
