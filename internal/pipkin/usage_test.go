@@ -147,7 +147,7 @@ func TestStableIdentityAndServerBackoff(t *testing.T) {
 	for _, header := range []string{"1800", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)} {
 		response := &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{header}}}
 		var retry *usageRetryError
-		if !errors.As(usageResponseError("Claude", response), &retry) || time.Until(retry.RetryAt) < 29*time.Minute {
+		if !errors.As(usageResponseError(response), &retry) || time.Until(retry.RetryAt) < 29*time.Minute {
 			t.Fatal("long server cooldown must be respected")
 		}
 	}

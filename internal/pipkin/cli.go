@@ -19,6 +19,7 @@ type cliCommand struct {
 	name, syntax string
 	summary      string // menu entry; empty hides the command
 	details      string // extra --help text
+	primary      bool
 	// parse validates options before the command runs; nil accepts none.
 	parse func([]string) error
 	run   func([]string) error
@@ -42,7 +43,7 @@ func cliCommands(buildVersion, licenseText, notices, goos string, output io.Writ
 	plain := func(run func() error) func([]string) error { return func([]string) error { return run() } }
 	authorize := ""
 	if goos == "darwin" {
-		authorize = "Allow macOS access to Claude's existing sign-in"
+		authorize = "Ask macOS again for access to Claude's sign-in"
 	}
 	printVersion := func([]string) error {
 		_, err := fmt.Fprintln(output, buildVersion)
@@ -53,25 +54,28 @@ func cliCommands(buildVersion, licenseText, notices, goos string, output io.Writ
 		return err
 	}
 	return []cliCommand{
-		{name: "usage", syntax: "pipkin usage [--json]", summary: "Read current usage now (--json for all fields)",
-			parse: jsonOption, run: usageCommand},
-		{name: "authorize", syntax: "pipkin authorize", summary: authorize, run: plain(authorizeCommand)},
-		{name: "status", syntax: "pipkin status [--json]", summary: "Show helper and display status (--json for cached readings)",
-			parse: jsonOption, run: statusCommand},
-		{name: "start", syntax: "pipkin start", summary: "Start the helper now", run: plain(startCommand)},
-		{name: "stop", syntax: "pipkin stop", summary: "Stop the helper until next sign-in", run: plain(stopCommand)},
-		{name: "restart", syntax: "pipkin restart", summary: "Restart the helper now", run: plain(restartCommand)},
-		{name: "update", syntax: "pipkin update", summary: "Install the latest helper release", run: plain(updateCommand)},
-		{name: "flash", syntax: "pipkin flash [--port PORT] [--version VERSION] [--reinstall] [--board PROFILE]",
-			summary: "Install or update display firmware (asks for confirmation)",
-			parse:   func(options []string) error { _, err := parseFlashOptions(options); return err }, run: flashCommand},
+		{name: "status", syntax: "pipkin status [--json]", summary: "Check that Pipkin is running and the display is connected", primary: true,
+			details: statusHelp, parse: jsonOption, run: func(args []string) error { return statusCommandTo(args, output) }},
+		{name: "usage", syntax: "pipkin usage [--json]", summary: "Show your Claude and Codex allowance right now", primary: true,
+			details: usageHelp, parse: jsonOption, run: func(args []string) error { return usageCommandTo(args, output, os.Stderr) }},
+		{name: "restart", syntax: "pipkin restart", summary: "Restart Pipkin if the display stops updating", primary: true, run: plain(restartCommand)},
+		{name: "update", syntax: "pipkin update", summary: "Update Pipkin on this computer", primary: true, details: updateHelp, run: plain(updateCommand)},
+		{name: "flash", syntax: "pipkin flash [options]", summary: "Install or update the display's firmware", primary: true,
+			details: flashHelp, parse: func(options []string) error { _, err := parseFlashOptions(options); return err }, run: flashCommand},
+		{name: "uninstall", syntax: "pipkin uninstall", summary: "Remove Pipkin from this computer", primary: true, details: uninstallHelp, run: plain(uninstallCommand)},
+		{name: "tasks", syntax: "pipkin tasks [--json]", summary: "Show observed local Claude Code and Codex tasks", details: tasksHelp,
+			parse: jsonOption, run: tasksCommand, standalone: true},
+		{name: "start", syntax: "pipkin start", summary: "Start Pipkin again after 'pipkin stop'", run: plain(startCommand)},
+		{name: "stop", syntax: "pipkin stop", summary: "Pause Pipkin until you next log in to this computer", details: stopHelp, run: plain(stopCommand)},
+		{name: "install", syntax: "pipkin install", summary: "Install or repair Pipkin on this computer", details: installHelp, run: plain(installCommand)},
+		{name: "authorize", syntax: "pipkin authorize", summary: authorize, details: authorizeHelp, run: plain(authorizeCommand)},
 		{name: "identify", syntax: "pipkin identify [--port PORT] [--json | --issue] [--board PROFILE]",
-			summary: "Inspect a connected board and prepare a board support report", details: identifyHelp,
-			parse: func(options []string) error { _, err := parseIdentifyOptions(options); return err }, run: identifyCommand},
-		{name: "uninstall", syntax: "pipkin uninstall", summary: "Remove the helper and its settings", run: plain(uninstallCommand)},
-		{name: "install", syntax: "pipkin install", summary: "Install or repair the helper", run: plain(installCommand)},
-		{name: "version", syntax: "pipkin version", summary: "Print the helper version", run: printVersion, standalone: true},
+			details: identifyHelp,
+			parse:   func(options []string) error { _, err := parseIdentifyOptions(options); return err }, run: identifyCommand},
+		{name: "version", syntax: "pipkin version", summary: "Show Pipkin's version", run: printVersion, standalone: true},
 		{name: "--version", syntax: "pipkin --version", run: printVersion, standalone: true},
+		{name: "-v", syntax: "pipkin -v", run: printVersion, standalone: true},
+		{name: "-V", syntax: "pipkin -V", run: printVersion, standalone: true},
 		{name: "license", syntax: "pipkin license", summary: "Show the license and third-party notices", run: printLicense, standalone: true},
 		{name: "run", syntax: "pipkin run [--home DIR]", parse: startupHome, run: plain(runCommand)},
 	}
@@ -81,7 +85,14 @@ func jsonOption(options []string) error {
 	if len(options) == 0 || len(options) == 1 && options[0] == "--json" {
 		return nil
 	}
-	return errUsage
+	bad := options[0]
+	if bad == "--json" && len(options) > 1 {
+		bad = options[1]
+		if bad == "--json" {
+			return &cliOptionError{"--json can only be used once"}
+		}
+	}
+	return invalidCLIOption(bad)
 }
 
 // Service managers start the helper with the installation directory it was registered for.
@@ -97,18 +108,38 @@ func startupHome(options []string) error {
 
 func formatCLIUsage(buildVersion string, commands []cliCommand) string {
 	var menu strings.Builder
-	fmt.Fprintf(&menu, "Pipkin display helper %s\n\nUsage: pipkin <command>\n\nCommands:\n", buildVersion)
+	fmt.Fprintf(&menu, "Pipkin %s shows your Claude and Codex allowance on your desk display.\n\n", buildVersion)
+	var more []string
 	for _, command := range commands {
 		if command.summary != "" {
-			fmt.Fprintf(&menu, "  %-11s %s\n", command.name, command.summary)
+			if command.primary {
+				fmt.Fprintf(&menu, "  %-11s %s\n", command.name, command.summary)
+			} else {
+				more = append(more, command.name)
+			}
 		}
 	}
+	if len(more) > 0 {
+		fmt.Fprintf(&menu, "\nMore: %s\n", strings.Join(more, ", "))
+	}
+	menu.WriteString("Run 'pipkin help <command>' for details.\nGuide: github.com/damian-w/pipkin-cli\n")
 	return menu.String()
 }
 
 func dispatch(args []string, buildVersion string, commands []cliCommand, output io.Writer) (int, error) {
 	menu := formatCLIUsage(buildVersion, commands)
 	if len(args) == 0 {
+		if dir, err := resolvedAppDir(); err == nil {
+			if installed, err := pathExists(filepath.Join(dir, "bin", executableName("pipkin"))); err == nil && installed {
+				if index := slices.IndexFunc(commands, func(command cliCommand) bool { return command.name == "status" }); index >= 0 {
+					if err := commands[index].run(nil); err != nil {
+						return cliResult(err)
+					}
+					_, err := io.WriteString(output, "\nRun 'pipkin help' to see all commands.\n")
+					return cliResult(err)
+				}
+			}
+		}
 		_, err := io.WriteString(output, menu)
 		return cliResult(err)
 	}
@@ -118,27 +149,41 @@ func dispatch(args []string, buildVersion string, commands []cliCommand, output 
 			_, err := io.WriteString(output, menu)
 			return cliResult(err)
 		}
-		if name != "help" || len(args) != 2 {
+		if len(args) != 2 {
 			return 1, errors.New("usage: pipkin help [command]")
 		}
 		name, args = args[1], []string{args[1], "--help"}
+		if name == "help" || name == "-h" || name == "--help" {
+			_, err := io.WriteString(output, menu)
+			return cliResult(err)
+		}
 	}
 	index := slices.IndexFunc(commands, func(command cliCommand) bool { return command.name == name })
 	if index < 0 {
-		return 2, fmt.Errorf("unknown command %q\n\n%s", name, menu)
+		if suggestion := suggestCLICommand(name, commands); suggestion != "" {
+			return 2, fmt.Errorf("unknown command %q. Did you mean 'pipkin %s'?\nRun 'pipkin help' to see all commands.", terminalText(name), suggestion)
+		}
+		return 2, fmt.Errorf("unknown command %q\n\n%s", terminalText(name), menu)
 	}
 	command, options := commands[index], args[1:]
-	if len(options) == 1 && (options[0] == "--help" || options[0] == "-h") {
-		_, err := fmt.Fprintf(output, "Usage: %s\n%s", command.syntax, command.details)
+	if slices.Contains(options, "--help") || slices.Contains(options, "-h") {
+		heading := ""
+		if command.summary != "" {
+			heading = command.summary + ".\n\n"
+		}
+		_, err := fmt.Fprintf(output, "%sUsage: %s\n%s", heading, command.syntax, command.details)
 		return cliResult(err)
 	}
 	var err error
 	if command.parse != nil {
 		err = command.parse(options)
 	} else if len(options) != 0 {
-		err = errUsage
+		err = invalidCLIOption(options[0])
 	}
-	if errors.Is(err, errUsage) {
+	var optionErr *cliOptionError
+	if errors.As(err, &optionErr) {
+		return 1, fmt.Errorf("%s for 'pipkin %s'\nUsage: %s", optionErr.Error(), command.name, command.syntax)
+	} else if errors.Is(err, errUsage) {
 		return 1, fmt.Errorf("usage: %s", command.syntax)
 	} else if err != nil {
 		return 1, fmt.Errorf("%w\nUsage: %s", err, command.syntax)

@@ -12,6 +12,8 @@ import (
 
 var serviceCommand = runServiceCommand
 
+var errHelperTimeout = errors.New("timed out waiting for the helper")
+
 func runServiceCommand(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -66,7 +68,7 @@ func waitFor(condition func() (bool, error), timeout time.Duration) error {
 			return err
 		}
 		if !time.Now().Before(deadline) {
-			return errors.New("timed out waiting for the helper")
+			return errHelperTimeout
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -90,7 +92,11 @@ func startHelper() error {
 			return err
 		}
 	}
-	return waitFor(helperReady, 6*time.Second)
+	err = waitFor(helperReady, 6*time.Second)
+	if errors.Is(err, errHelperTimeout) {
+		return fmt.Errorf("Pipkin did not become ready. Check %s for details: %w", logPath(), err)
+	}
+	return err
 }
 
 func helperReady() (bool, error) {

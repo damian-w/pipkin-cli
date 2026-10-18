@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
 	"net/url"
 	"os"
@@ -167,7 +166,7 @@ func loadClaudeCodeCredential(ctx context.Context) (claudeCredential, error) {
 	}
 	raw, err := readFileBounded(filepath.Join(claudeConfig(), ".credentials.json"), maxClaudeFileSize)
 	if errors.Is(err, os.ErrNotExist) {
-		return zero, fmt.Errorf("Claude: %w", errSignedOut)
+		return zero, signedOutError("not signed in")
 	}
 	if err != nil {
 		return zero, errors.New("Claude credentials could not be read")
@@ -237,18 +236,18 @@ func validateClaudeDesktopIdentity(ctx context.Context, credential claudeCredent
 	}
 	config, err := readClaudeDesktopConfig(credential.desktopDir)
 	if err != nil || !config.signedIn() {
-		return fmt.Errorf("Claude Desktop sign-in changed while reading usage; retry: %w", errSignedOut)
+		return signedOutError("Sign-in changed while reading usage. Try again.")
 	}
 	account, _, _ := strings.Cut(credential.identity, "|")
 	if !strings.EqualFold(config.AccountUUID, account) {
-		return fmt.Errorf("Claude Desktop account changed while reading usage; retry: %w", errSignedOut)
+		return signedOutError("Active account changed while reading usage. Try again.")
 	}
 	current, err := loadClaudeDesktopCredential(ctx, credential.desktopDir, config)
 	if err != nil {
 		return err
 	}
 	if current.identity != credential.identity {
-		return fmt.Errorf("Claude Desktop organization changed while reading usage; retry: %w", errSignedOut)
+		return signedOutError("Active organization changed while reading usage. Try again.")
 	}
 	return nil
 }
@@ -258,11 +257,11 @@ func parseClaudeCodeCredential(raw []byte, source string) (claudeCredential, err
 		OAuth claudeCredential `json:"claudeAiOauth"`
 	}
 	if json.Unmarshal(raw, &file) != nil || strings.TrimSpace(file.OAuth.AccessToken) == "" {
-		return claudeCredential{}, fmt.Errorf("Claude: %w", errSignedOut)
+		return claudeCredential{}, signedOutError("not signed in")
 	}
 	c := file.OAuth
 	if c.ExpiresAt > 0 && c.ExpiresAt <= float64(time.Now().UnixMilli()) {
-		return c, fmt.Errorf("Claude sign-in expired; open Claude to renew it: %w", errSignedOut)
+		return c, signedOutError("Sign-in expired. Open Claude Code to sign in again.")
 	}
 	if len(c.Scopes) > 0 && !slices.Contains(c.Scopes, "user:profile") {
 		return c, errors.New("Claude sign-in cannot read subscription usage")
@@ -520,7 +519,7 @@ func selectClaudeDesktopToken(v2, v1 map[string]json.RawMessage, account, org st
 		}
 	}
 	if stale {
-		return claudeCredential{}, fmt.Errorf("Claude Desktop sign-in expired; open Claude Desktop to renew it: %w", errSignedOut)
+		return claudeCredential{}, signedOutError("Sign-in expired. Open Claude to sign in again.")
 	}
-	return claudeCredential{}, fmt.Errorf("Claude Desktop has no usage-capable login for the active account: %w", errSignedOut)
+	return claudeCredential{}, signedOutError("No saved subscription sign-in for the active account. Open Claude to sign in again.")
 }

@@ -33,6 +33,7 @@ type Status struct {
 	PID           int                 `json:"pid"`
 	Device        map[string]string   `json:"device"`
 	Readings      map[string]*Reading `json:"readings"`
+	Tasks         *TaskSnapshot       `json:"tasks,omitempty"`
 	CodexError    string              `json:"codex_error,omitempty"`
 	ClaudeError   string              `json:"claude_error,omitempty"`
 	Updated       int64               `json:"updated"`
@@ -71,6 +72,12 @@ type Helper struct {
 	powerEvents      <-chan powerEvent
 	monitor          func(context.Context, chan<- powerEvent) (func(), error)
 	handlingPower    bool
+	tasks            *TaskSnapshot
+	taskPending      bool
+	taskGeneration   uint64
+	taskCancel       context.CancelFunc
+	taskResults      chan taskCollectionResult
+	collectTasks     func(context.Context) TaskSnapshot
 }
 
 func newHelper() (*Helper, error) {
@@ -83,6 +90,8 @@ func newHelper() (*Helper, error) {
 		due: map[string]time.Time{}, cooldown: map[string]time.Time{}, observedGeneration: map[string]uint64{},
 		providerErrors: map[string]string{}, pending: map[string]bool{}, results: make(chan providerResult, len(providers))}
 	h.write = h.writeSerial
+	h.collectTasks = collectTaskSnapshot
+	h.taskResults = make(chan taskCollectionResult, 1)
 	return h, nil
 }
 
@@ -144,6 +153,9 @@ func (h *Helper) connect(ctx context.Context) {
 // Probe one openable port per pass so unrelated boards cannot stall collection.
 // Rotating candidates gives each board a complete identity timeout.
 func (h *Helper) connectPorts(ctx context.Context, ports []string, open func(string) (serialPort, error)) {
+	if len(ports) == 0 && ctx.Err() == nil {
+		delete(h.device, "error")
+	}
 	for i, name := range ports {
 		if name == h.config.LastPort && i > 0 {
 			ports[0], ports[i] = ports[i], ports[0]
@@ -160,6 +172,7 @@ func (h *Helper) connectPorts(ctx context.Context, ports []string, open func(str
 			h.device = map[string]string{"error": fmt.Sprintf("%s: %v", name, err)}
 			continue
 		}
+		delete(h.device, "error")
 		conn := &connection{port: port, name: name}
 		identity := identify(ctx, conn, 3500*time.Millisecond)
 		if identity == nil || ctx.Err() != nil {
@@ -214,6 +227,7 @@ func (h *Helper) setClockEpoch(epoch uint64) {
 
 func (h *Helper) invalidateObservations() {
 	h.generation++
+	h.invalidateTasks(h.now())
 	h.refreshProviders(h.now())
 }
 
@@ -383,7 +397,7 @@ func (h *Helper) pollProviders(ctx context.Context, now time.Time) {
 
 func (h *Helper) writeStatus() {
 	status := Status{SchemaVersion: 1, States: h.apps, Version: version, PID: os.Getpid(), Device: h.device, Readings: h.readings,
-		CodexError: h.providerErrors["codex"], ClaudeError: h.providerErrors["claude"]}
+		CodexError: h.providerErrors["codex"], ClaudeError: h.providerErrors["claude"], Tasks: h.tasks}
 	current, _ := json.Marshal(status)
 	if bytes.Equal(current, h.lastStatus) {
 		return
@@ -474,6 +488,7 @@ func (h *Helper) run(ctx context.Context) {
 			h.handleInput()
 		}
 		h.pollProviders(ctx, now)
+		h.pollTasks(ctx, now)
 		if h.conn != nil {
 			h.drainPowerEvents(events)
 			if h.power.suspended() {
@@ -511,7 +526,11 @@ func (h *Helper) run(ctx context.Context) {
 }
 
 func runCommand() error {
-	return runCommandWithMaintenanceRelease((*os.File).Close)
+	err := runCommandWithMaintenanceRelease((*os.File).Close)
+	if err != nil && !errors.Is(err, errAlreadyRunning) && !errors.Is(err, context.Canceled) {
+		logf("Pipkin startup failed: %v", err)
+	}
+	return err
 }
 
 func runCommandWithMaintenanceRelease(release func(*os.File) error) error {

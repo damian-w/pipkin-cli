@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
 	"strings"
@@ -66,7 +65,7 @@ func fetchClaudeCredentialUsage(ctx context.Context, credential claudeCredential
 	if account != nil {
 		actual := account.identity()
 		if identity != "" && identity != actual {
-			return nil, fmt.Errorf("Claude Desktop login no longer matches its active account: %w", errSignedOut)
+			return nil, signedOutError("Saved sign-in no longer matches the active account. Open Claude to sign in again.")
 		}
 		identity = actual
 		if account.Organization.Type != "" {
@@ -101,7 +100,7 @@ func requestClaudeOAuth(ctx context.Context, token, endpoint string) ([]byte, er
 	// This surface header also makes the usage endpoint report reset grants.
 	req.Header.Set("User-Agent", "claude-cli/2.1.280 (external, cli)")
 	return requestUsage(req, "Claude", map[int]error{
-		http.StatusUnauthorized: fmt.Errorf("Claude sign-in expired; open Claude to renew it: %w", errSignedOut),
+		http.StatusUnauthorized: signedOutError("Sign-in expired. Open Claude to sign in again."),
 		http.StatusForbidden:    errors.New("Claude sign-in cannot read subscription usage"),
 	})
 }

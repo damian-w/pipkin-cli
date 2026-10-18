@@ -16,9 +16,6 @@ func TestTerminalTextRemovesControlCharacters(t *testing.T) {
 	if got := terminalText("Pro · 模型"); got != "Pro · 模型" {
 		t.Fatalf("printable text changed: %q", got)
 	}
-	if got := describeWindow(value, nil, 0); got != want+" unknown" {
-		t.Fatalf("unsafe model label: %q", got)
-	}
 }
 
 func TestPreserveExistingLauncher(t *testing.T) {

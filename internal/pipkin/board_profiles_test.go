@@ -130,7 +130,14 @@ func TestFlashUnknownBoardRemainsUnconfirmed(t *testing.T) {
 	if err := f.run(context.Background(), flashOptions{}, "no\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(f.output.String(), "Physical board profile is unconfirmed") {
-		t.Fatal("firmware claim auto-identified physical board", f.output.String())
+	if strings.Contains(f.output.String(), "profile is unconfirmed") {
+		t.Fatal("an update displayed the first-install profile warning", f.output.String())
+	}
+	info, err := inspectBoard(f.tool.probe, "")
+	if err != nil || info.Profile != "" {
+		t.Fatal("firmware claim auto-identified the physical board", info, err)
+	}
+	if _, err := os.Stat(rememberedBoardsPath()); !os.IsNotExist(err) {
+		t.Fatal("an unconfirmed update saved a physical board association", err)
 	}
 }

@@ -64,16 +64,24 @@ type Config struct {
 
 // Preserve unknown fields and concurrent updates under a separate configuration lock.
 func updateConfig(update func(*Config) error) (Config, error) {
+	config, _, err := updateConfigWithRepair(update, false)
+	return config, err
+}
+
+// Only an explicit install may repair malformed settings. Keep the original
+// bytes in a private, unique backup before atomically replacing the file.
+func updateConfigWithRepair(update func(*Config) error, repair bool) (Config, string, error) {
+	var backup string
 	var config Config
 	dir, err := resolvedAppDir()
 	if err != nil {
-		return config, fmt.Errorf("could not locate Pipkin configuration: %w", err)
+		return config, backup, fmt.Errorf("could not locate Pipkin configuration: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	lock, err := waitFileLock(ctx, filepath.Join(dir, "config.lock"))
 	if err != nil {
-		return config, fmt.Errorf("could not lock Pipkin configuration: %w", err)
+		return config, backup, fmt.Errorf("could not lock Pipkin configuration: %w", err)
 	}
 	defer lock.Close()
 	path := configPath()
@@ -86,26 +94,37 @@ func updateConfig(update func(*Config) error) (Config, error) {
 		if err == nil {
 			err = json.Unmarshal(data, &config)
 		}
+		if err != nil && !repair {
+			return config, backup, fmt.Errorf("Pipkin configuration (config.json) is malformed; run 'pipkin install' to repair it: %w", err)
+		}
+		if err != nil && repair {
+			backup, err = backupInstallConfig(path, data)
+			if err != nil {
+				return config, backup, fmt.Errorf("could not back up malformed config.json: %w", err)
+			}
+			config = Config{}
+			fields = make(map[string]json.RawMessage)
+		}
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config, fmt.Errorf("could not read Pipkin configuration: %w", err)
+		return config, backup, fmt.Errorf("could not read Pipkin configuration: %w", err)
 	}
 	before := config
 	if update != nil {
 		if err := update(&config); err != nil {
-			return before, err
+			return before, backup, err
 		}
 	}
 	if before == config {
-		return config, nil
+		return config, backup, nil
 	}
 	known, err := json.Marshal(config)
 	if err != nil {
-		return before, err
+		return before, backup, err
 	}
 	var updated map[string]json.RawMessage
 	if err := json.Unmarshal(known, &updated); err != nil {
-		return before, err
+		return before, backup, err
 	}
 	for _, field := range []string{"salt", "port", "last_port"} {
 		if value, ok := updated[field]; ok {
@@ -115,22 +134,49 @@ func updateConfig(update func(*Config) error) (Config, error) {
 		}
 	}
 	if err := writeJSON(path, fields); err != nil {
-		return before, err
+		return before, backup, err
 	}
-	return config, nil
+	return config, backup, nil
 }
 
 func initializedConfig() (Config, error) {
-	return updateConfig(func(config *Config) error {
-		if config.Salt == "" {
-			salt := make([]byte, 16)
-			if _, err := rand.Read(salt); err != nil {
-				return err
-			}
-			config.Salt = hex.EncodeToString(salt)
+	return updateConfig(initializeConfigSalt)
+}
+
+func initializedInstallConfig() (Config, string, error) {
+	return updateConfigWithRepair(initializeConfigSalt, true)
+}
+
+func initializeConfigSalt(config *Config) error {
+	if config.Salt == "" {
+		salt := make([]byte, 16)
+		if _, err := rand.Read(salt); err != nil {
+			return err
 		}
-		return nil
-	})
+		config.Salt = hex.EncodeToString(salt)
+	}
+	return nil
+}
+
+func backupInstallConfig(path string, data []byte) (string, error) {
+	file, err := os.CreateTemp(filepath.Dir(path), "config.json.backup-")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	_, err = file.Write(data)
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	return name, nil
 }
 
 func logf(format string, args ...any) {

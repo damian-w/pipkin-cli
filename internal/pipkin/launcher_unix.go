@@ -42,4 +42,10 @@ func removeLauncher() error {
 	return nil
 }
 
-func removeInstallation() error { return os.RemoveAll(appDir()) }
+func removeInstallation(target removalTarget) error {
+	tombstone, err := stageVerifiedInstallationRemoval(target)
+	if err != nil || tombstone == "" {
+		return err
+	}
+	return os.RemoveAll(tombstone)
+}

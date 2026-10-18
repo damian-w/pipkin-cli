@@ -31,7 +31,7 @@ func loadCodexAuth(ctx context.Context) (codexAuth, error) {
 			return codexAuth{}, err
 		}
 		if mode == "ephemeral" {
-			return codexAuth{}, fmt.Errorf("Codex uses an in-memory sign-in: %w", errSignedOut)
+			return codexAuth{}, signedOutError("In-memory sign-in cannot be read. Use a saved Codex sign-in.")
 		}
 		if mode == "keyring" || mode == "auto" {
 			auth, err := codexKeyringAuth(ctx, home)
@@ -42,7 +42,7 @@ func loadCodexAuth(ctx context.Context) (codexAuth, error) {
 				return codexAuth{}, err
 			}
 			if mode == "keyring" {
-				return codexAuth{}, fmt.Errorf("Codex keyring sign-in is absent: %w", errSignedOut)
+				return codexAuth{}, signedOutError("not signed in")
 			}
 		}
 		data, err := readFileBounded(filepath.Join(home, "auth.json"), maxCredentialSize)
@@ -56,10 +56,10 @@ func loadCodexAuth(ctx context.Context) (codexAuth, error) {
 		}
 		if _, err := os.Stat(filepath.Join(home, "config.toml")); !errors.Is(err, os.ErrNotExist) {
 			// A configured home is selected even after sign-out removes auth.json.
-			return codexAuth{}, fmt.Errorf("Codex app sign-in is absent: %w", errSignedOut)
+			return codexAuth{}, signedOutError("not signed in")
 		}
 	}
-	return codexAuth{}, fmt.Errorf("no readable Codex app sign-in found: %w", errSignedOut)
+	return codexAuth{}, signedOutError("not signed in")
 }
 
 func codexAuthHomes() []string {
@@ -72,7 +72,7 @@ func codexAuthHomes() []string {
 func codexKeyringAuth(ctx context.Context, home string) (codexAuth, error) {
 	data, err := readGenericPassword(ctx, "Codex Auth", codexStoreKey(home))
 	if err != nil {
-		return codexAuth{}, fmt.Errorf("Codex credential store: %w", err)
+		return codexAuth{}, fmt.Errorf("Credential store: %w", err)
 	}
 	auth, err := parseCodexAuth(data)
 	auth.Source = "codex_keyring"
@@ -113,7 +113,7 @@ func parseCodexAuth(data []byte) (codexAuth, error) {
 		return codexAuth{}, errors.New("Codex sign-in file is malformed")
 	}
 	if (document.AuthMode != "" && document.AuthMode != "chatgpt" && document.AuthMode != "chatgptAuthTokens") || (document.AuthMode == "" && document.APIKey != "") {
-		return codexAuth{}, fmt.Errorf("Codex does not use a subscription sign-in: %w", errSignedOut)
+		return codexAuth{}, signedOutError("Sign in to Codex with a subscription account to read usage.")
 	}
 	if strings.TrimSpace(document.Tokens.AccessToken) == "" {
 		return codexAuth{}, errors.New("Codex sign-in has no subscription access token")

@@ -52,38 +52,58 @@ type fakeFirmwareFlasher struct {
 	writes                 [][]flashWriteImage
 	writeErr, resetErr     error
 	probeErr, readErr      error
+	eraseErr               error
 	secondMAC              string
 	afterWrite             func()
+	onProbe                func(context.Context, int)
+	onRead                 func(context.Context, int64)
+	onErase, onWrite       func(context.Context)
+	onReset                func(context.Context)
 }
 
-func (f *fakeFirmwareFlasher) Probe(context.Context, string) (flashProbe, error) {
+func (f *fakeFirmwareFlasher) Probe(ctx context.Context, _ string) (flashProbe, error) {
 	f.probes++
+	if f.onProbe != nil {
+		f.onProbe(ctx, f.probes)
+	}
 	probe := f.probe
 	if f.probes == 2 && f.secondMAC != "" {
 		probe.MAC = f.secondMAC
 	}
 	return probe, f.probeErr
 }
-func (f *fakeFirmwareFlasher) Read(_ context.Context, _ string, offset, size int64) ([]byte, error) {
+func (f *fakeFirmwareFlasher) Read(ctx context.Context, _ string, offset, size int64) ([]byte, error) {
+	if f.onRead != nil {
+		f.onRead(ctx, offset)
+	}
 	if offset == 0x10000 {
 		return f.prefix, f.readErr
 	}
 	return f.table, f.readErr
 }
-func (f *fakeFirmwareFlasher) Write(_ context.Context, _ string, images []flashWriteImage) error {
+func (f *fakeFirmwareFlasher) Write(ctx context.Context, _ string, images []flashWriteImage) error {
+	if f.onWrite != nil {
+		f.onWrite(ctx)
+	}
 	f.writes = append(f.writes, images)
 	if f.afterWrite != nil {
 		f.afterWrite()
 	}
 	return f.writeErr
 }
-func (f *fakeFirmwareFlasher) Reset(context.Context, string) error {
+func (f *fakeFirmwareFlasher) Reset(ctx context.Context, _ string) error {
 	f.resets++
+	if f.onReset != nil {
+		f.onReset(ctx)
+	}
 	return f.resetErr
 }
-func (f *fakeFirmwareFlasher) EraseSettings(context.Context, string) error {
+func (f *fakeFirmwareFlasher) EraseSettings(ctx context.Context, _ string) error {
 	f.erases++
-	return nil
+	if f.onErase != nil {
+		f.onErase(ctx)
+	}
+	return f.eraseErr
 }
 
 type flashFixture struct {
@@ -165,8 +185,14 @@ func TestFlashFirstInstallAndUpdate(t *testing.T) {
 			if update && f.tool.writes[0][0].Offset != 0x10000 {
 				t.Fatal("update touched bootloader, partitions or settings")
 			}
-			if !strings.Contains(f.output.String(), "Confirm this is a CYD") || !strings.Contains(f.output.String(), "1.0.1 is running") {
+			if strings.Contains(f.output.String(), "Confirm this is a CYD") == update || !strings.Contains(f.output.String(), "1.0.1 is running") {
 				t.Fatal(f.output.String())
+			}
+			if update && (!strings.Contains(f.output.String(), "Update your Pipkin display from 1.0.0 to 1.0.1?") || !strings.Contains(f.output.String(), "Update now?")) {
+				t.Fatal(f.output.String())
+			}
+			if strings.Contains(f.output.String(), "Finishing the firmware write") {
+				t.Fatal("an uncancelled flash printed a cancellation notice", f.output.String())
 			}
 		})
 	}
@@ -280,7 +306,7 @@ func TestFlashStoredPipkinFirmwarePreservesSettings(t *testing.T) {
 				if len(f.tool.writes) != 1 || len(f.tool.writes[0]) != 1 || f.tool.writes[0][0].Offset != 0x10000 || !strings.Contains(f.output.String(), "stored; not responding") {
 					t.Fatal("nonresponding kit was treated as a new board", f.output.String())
 				}
-				if options.Reinstall && !strings.Contains(f.output.String(), "Reinstall: Pipkin 1.0.1") {
+				if options.Reinstall && !strings.Contains(f.output.String(), "Reinstall Pipkin 1.0.1") {
 					t.Fatal("stored firmware reinstall was labelled as an update", f.output.String())
 				}
 			} else if len(f.tool.writes) != 0 {
@@ -342,7 +368,7 @@ func TestFlashFailureRestoresHelperAndReportsRecovery(t *testing.T) {
 			if len(f.tool.writes) != 0 && scenario != "restore" && !strings.Contains(err.Error(), "no automatic rollback") {
 				t.Fatal("write failure did not explain recovery", err)
 			}
-			if scenario == "restore" && strings.Contains(err.Error(), "retry pipkin flash") {
+			if scenario == "restore" && strings.Contains(err.Error(), "To fix it:") {
 				t.Fatal("helper failure asked to reflash verified running firmware", err)
 			}
 		})
@@ -352,10 +378,10 @@ func TestFlashFailureRestoresHelperAndReportsRecovery(t *testing.T) {
 func TestFlashCancellationRestoresStoppedHelper(t *testing.T) {
 	f := newFlashFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	f.tool.afterWrite = cancel
-	f.tool.writeErr = context.Canceled
-	if err := f.run(ctx, flashOptions{}, "y\n"); !errors.Is(err, context.Canceled) || f.starts != 1 || f.tool.resets != 1 {
-		t.Fatal("cancelled write was not recovered", err)
+	if err := f.run(ctx, flashOptions{}, "y\n"); err != nil || f.starts != 1 || f.tool.resets != 1 || f.identities != 2 || strings.Count(f.output.String(), "Finishing the firmware write") != 1 {
+		t.Fatal("late cancellation interrupted the write or verification", err, f.output.String())
 	}
 	f = newFlashFixture(t)
 	f.running = false

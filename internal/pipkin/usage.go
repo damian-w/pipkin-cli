@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
-	"slices"
 	"strconv"
 	"time"
+
+	"github.com/mattn/go-isatty"
 )
 
 var errSignedOut = errors.New("no existing sign-in found")
@@ -27,8 +28,8 @@ type usageRetryError struct {
 
 func (e *usageRetryError) Error() string { return e.message }
 
-func usageResponseError(provider string, response *http.Response) error {
-	message := fmt.Sprintf("%s usage returned HTTP %d", provider, response.StatusCode)
+func usageResponseError(response *http.Response) error {
+	message := fmt.Sprintf("Usage request returned HTTP %d", response.StatusCode)
 	if response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusServiceUnavailable {
 		return errors.New(message)
 	}
@@ -50,7 +51,7 @@ func requestUsage(request *http.Request, provider string, statusErrors map[int]e
 	request.Header.Set("Accept", "application/json")
 	response, err := usageHTTPClient.Do(request)
 	if err != nil {
-		return nil, offlineError{provider + " usage request failed; check your connection"}
+		return nil, offlineError{"Can't reach " + provider + ". Check your internet connection."}
 	}
 	defer response.Body.Close()
 	if err := statusErrors[response.StatusCode]; err != nil {
@@ -58,11 +59,11 @@ func requestUsage(request *http.Request, provider string, statusErrors map[int]e
 	}
 	if response.StatusCode != http.StatusOK {
 		// Provider bodies can contain account details. Never forward them to logs.
-		return nil, usageResponseError(provider, response)
+		return nil, usageResponseError(response)
 	}
 	data, err := readBounded(response.Body, 1<<20)
 	if err != nil {
-		return nil, errors.New(provider + " usage response is unreadable or too large")
+		return nil, errors.New("Usage response is unreadable or too large")
 	}
 	return data, nil
 }
@@ -123,79 +124,31 @@ func (s Status) providerError(provider string) string {
 }
 
 func usageCommand(args []string) error {
-	jsonOutput := len(args) == 1
-	now := time.Now()
-	config, err := initializedConfig()
-	if err != nil {
-		return err
-	}
-	results := make(chan providerResult, 2)
-	for _, provider := range providers {
-		go func() { results <- collectProvider(context.Background(), provider, config.Salt) }()
-	}
-	status := Status{SchemaVersion: 1, States: map[string]string{}, Version: version, Readings: map[string]*Reading{}, Updated: now.Unix()}
-	messages := map[string]string{}
-	for range providers {
-		result := <-results
-		status.Readings[result.provider] = result.reading
-		status.States[result.provider] = providerState(result.err)
-		messages[result.provider] = providerMessage(result.err)
-	}
-	status.CodexError, status.ClaudeError = messages["codex"], messages["claude"]
-	if jsonOutput {
-		return printJSON(status)
-	}
-	for _, provider := range providers {
-		r := status.Readings[provider]
-		message := status.providerError(provider)
-		fmt.Printf("%s", provider)
-		if r.Plan != "" {
-			fmt.Printf(" (%s)", terminalText(r.Plan))
-		}
-		fmt.Println(":")
-		if message != "" {
-			fmt.Printf("  %s\n", message)
-		} else {
-			if r.SessionNoCap {
-				fmt.Println("  Session: no cap")
-			} else {
-				fmt.Println("  " + describeWindow("Session", r.Session, now.Unix()))
-			}
-			fmt.Println("  " + describeWindow("Weekly", r.Weekly, now.Unix()))
-		}
-		for _, model := range slices.Sorted(maps.Keys(r.Models)) {
-			fmt.Println("  " + describeWindow(model, r.Models[model], now.Unix()))
-		}
-		if r.ExtraUsage != nil {
-			if !r.ExtraUsage.Enabled {
-				fmt.Println("  Extra usage: disabled")
-			} else if r.ExtraUsage.Used != nil {
-				fmt.Printf("  Extra usage: %.2f %s used\n", *r.ExtraUsage.Used, r.ExtraUsage.Currency)
-			} else {
-				fmt.Println("  Extra usage: enabled; spend unavailable")
-			}
-		}
-		if r.Credits != nil {
-			if r.Credits.Unlimited {
-				fmt.Println("  Credits: unlimited")
-			} else if r.Credits.Balance != nil {
-				fmt.Printf("  Credits: %.2f\n", *r.Credits.Balance)
-			}
-		}
-		if r.Banked != nil {
-			fmt.Printf("  Banked resets: %d\n", *r.Banked)
-		}
-	}
-	return nil
+	return usageCommandTo(args, os.Stdout, os.Stderr)
+}
+
+func usageCommandTo(args []string, out, progress io.Writer) error {
+	return runUsage(context.Background(), len(args) == 1, out, progress, usageDependencies{
+		now: time.Now, config: initializedConfig, collect: collectProvider,
+		progressTerminal: isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd()),
+	})
 }
 
 func printJSON(value any) error {
-	encoder := json.NewEncoder(os.Stdout)
+	return printJSONTo(os.Stdout, value)
+}
+
+func printJSONTo(out io.Writer, value any) error {
+	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
 }
 
 func statusJSONCommand() error {
+	return statusJSONTo(os.Stdout)
+}
+
+func statusJSONTo(out io.Writer) error {
 	var status Status
 	if err := readJSON(statusPath(), &status); err != nil {
 		return errors.New("no helper snapshot yet; run `pipkin usage --json` for a fresh read")
@@ -205,18 +158,11 @@ func statusJSONCommand() error {
 		return err
 	}
 	status.PID = pid
-	return printJSON(status)
+	status.Tasks = readableTaskSnapshot(status.Tasks, pid != 0, time.Now())
+	return printJSONTo(out, status)
 }
 
 func authorizeCommand() error {
-	if runtime.GOOS != "darwin" {
-		fmt.Println("Pipkin reads existing sign-ins automatically on this platform.")
-		return nil
-	}
-	fmt.Println("macOS may ask to read Claude's saved sign-in. Choose Always Allow for background access.")
-	if err := authorizeClaudeKeychain(context.Background()); err != nil {
-		return err
-	}
-	fmt.Println("Claude's saved sign-in is ready. No Claude login was needed.")
-	return nil
+	return runAuthorize(context.Background(), runtime.GOOS, os.Getenv("PIPKIN_AUTHORIZE_NESTED") == "1", os.Stdout,
+		authorizeDependencies{authorize: authorizeClaudeKeychainWithNotice, running: statusRunningPID, restart: restartCommand})
 }

@@ -115,7 +115,7 @@ func prepareFlashToolAsset(ctx context.Context, output io.Writer, cache string, 
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("cached esptool archive failed verification; remove %s and retry: %w", archive, err)
 		}
-		fmt.Fprintf(output, "Downloading flashing tool (esptool %s)…\n", flashToolVersion)
+		fmt.Fprintf(output, "Downloading flashing tool (esptool %s)...\n", flashToolVersion)
 		if err := downloadToolArchive(ctx, client, url, archive, asset.SHA256); err != nil {
 			return nil, err
 		}
@@ -596,11 +596,11 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 	// Explicit baseline options prevent host esptool configuration from changing
 	// image headers. Individual files leave intervening NVS sectors untouched.
 	options := []string{"--flash-mode", "dio", "--flash-freq", "40m", "--flash-size", "4MB"}
-	fmt.Fprintln(t.output, "Writing firmware…")
+	fmt.Fprintln(t.output, "Writing firmware...")
 	if _, err := t.run(ctx, 3*time.Minute, slices.Concat(args, []string{"write-flash"}, options, []string{"--no-progress"}, pairs)...); err != nil {
 		return err
 	}
-	fmt.Fprintln(t.output, "Verifying firmware…")
+	fmt.Fprintln(t.output, "Verifying firmware...")
 	_, err = t.run(ctx, 2*time.Minute, slices.Concat(args, []string{"verify-flash"}, options, pairs)...)
 	return err
 }

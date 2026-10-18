@@ -34,7 +34,7 @@ func recordingCommands(output io.Writer, calls *int) []cliCommand {
 }
 
 func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
+	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
 		for _, option := range []string{"--dry-run", "--json --extra"} {
 			calls := 0
 			code, err := dispatch([]string{command, option}, "test", recordingCommands(io.Discard, &calls), io.Discard)
@@ -46,7 +46,7 @@ func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
 }
 
 func TestCLIHelpHasNoCommandSideEffects(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
+	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
 		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
 			var output bytes.Buffer
 			calls := 0
@@ -62,10 +62,10 @@ func TestCLIUsageListsCommandsForPlatform(t *testing.T) {
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		t.Run(goos, func(t *testing.T) {
 			menu := formatCLIUsage("test", cliCommands("test", "", "", goos, io.Discard))
-			if strings.Contains(menu, "\n  authorize ") != (goos == "darwin") {
+			if strings.Contains(menu, ", authorize") != (goos == "darwin") {
 				t.Fatalf("incorrect authorize visibility on %s: %q", goos, menu)
 			}
-			for _, command := range []string{"usage", "status", "start", "stop", "restart", "update", "flash", "identify", "uninstall", "install", "version", "license"} {
+			for _, command := range []string{"usage", "status", "restart", "update", "flash", "uninstall"} {
 				if !strings.Contains(menu, "\n  "+command+" ") {
 					t.Fatalf("%s missing from %s command menu: %q", command, goos, menu)
 				}
@@ -75,6 +75,7 @@ func TestCLIUsageListsCommandsForPlatform(t *testing.T) {
 }
 
 func TestCLIGeneralHelpAndUnknownCommandUsePlatformMenu(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", filepath.Join(t.TempDir(), "uninstalled"))
 	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"-h"}, {"unknown"}} {
 		var output bytes.Buffer
 		calls := 0
@@ -88,10 +89,10 @@ func TestCLIGeneralHelpAndUnknownCommandUsePlatformMenu(t *testing.T) {
 		} else if code != 0 || err != nil {
 			t.Fatalf("%v: code=%d error=%v", args, code, err)
 		}
-		if calls != 0 || !strings.Contains(menu, "Pipkin display helper test") || !strings.Contains(menu, "\n  restart ") {
+		if calls != 0 || !strings.Contains(menu, "Pipkin test shows") || !strings.Contains(menu, "\n  restart ") {
 			t.Fatalf("%v: calls=%d menu=%q", args, calls, menu)
 		}
-		if strings.Contains(menu, "\n  authorize ") != (runtime.GOOS == "darwin") {
+		if strings.Contains(menu, ", authorize") != (runtime.GOOS == "darwin") {
 			t.Fatalf("%v: incorrect authorize visibility on %s: %q", args, runtime.GOOS, menu)
 		}
 	}
@@ -160,6 +161,7 @@ type failingCLIWriter struct{}
 func (failingCLIWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func TestCLIReportsOutputErrors(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", filepath.Join(t.TempDir(), "uninstalled"))
 	for _, args := range [][]string{nil, {"version"}, {"license"}, {"stop", "--help"}} {
 		if code, err := dispatch(args, "test", testCommands(t, failingCLIWriter{}, nil), failingCLIWriter{}); code != 1 || !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("%v: %d, %v", args, code, err)

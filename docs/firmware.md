@@ -44,9 +44,14 @@ and verifies their checksums. It checks the serial connection, current firmware
 when available, and the board's ESP chip and flash. These checks may briefly restart
 the display. It then shows the board, current firmware, target version and whether
 the action (install, update, reinstall or downgrade), and asks for yes/no confirmation.
+Known Pipkin updates use a short version-to-version plan. First installation
+also names the board and warns that its existing firmware and settings will be
+replaced. The CLI warns before the bootloader probe can blank or restart the
+screen; confirming a first installation still requires checking the physical
+CYD board.
 
-Only `y` or `yes` confirms. Enter, no, end of input or cancellation does not write
-firmware. Confirmation requires an interactive terminal; there is no `--yes`
+Only `y` or `yes` confirms. Enter, no, end of input or cancellation before the
+write does not write firmware. Confirmation requires an interactive terminal; there is no `--yes`
 option. All compatibility checks still apply after confirmation.
 
 The CLI pauses a running helper while using the USB port and restores it afterward,
@@ -95,7 +100,15 @@ and clears its saved application settings. The plan states this before confirmat
 Flashing does not erase the entire flash chip.
 
 Keep the USB cable connected until the command finishes. The firmware has one
-application slot and no automatic rollback. After an interrupted flash, reconnect
+application slot and no automatic rollback. Ctrl-C before writing cancels and
+restores the board and helper. After the destructive step begins, Ctrl-C prints
+"Finishing the firmware write; please keep the cable plugged in." and lets the
+write, verification, restart and boot check finish. The flashing tool's operation
+timeouts still apply. This protects an ordinary Ctrl-C; disconnecting USB,
+closing the terminal, stopping the process forcibly or losing power can still
+interrupt the operation.
+
+After an interrupted flash, reconnect
 the board and rerun `pipkin flash`; add `--reinstall` if needed. If automatic
 bootloader entry fails, follow the command's bootloader guidance, then try again.
 

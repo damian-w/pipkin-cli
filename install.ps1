@@ -1,4 +1,4 @@
-# Installs the Pipkin helper on Windows:
+# Installs Pipkin on Windows:
 #   irm https://pipkin.io/install.ps1 | iex
 & {
     $ErrorActionPreference = 'Stop'
@@ -40,6 +40,7 @@
         $workdir = Join-Path ([System.IO.Path]::GetTempPath()) ("pipkin-" + [guid]::NewGuid())
         New-Item -ItemType Directory -Path $workdir | Out-Null
         try {
+            Write-Host "Downloading Pipkin $($tag -replace '^v', '')..."
             # Release assets use application/octet-stream; read the manifest as text.
             $sumsFile = Join-Path $workdir 'SHA256SUMS'
             Invoke-WebRequest -UseBasicParsing "$release/SHA256SUMS" -OutFile $sumsFile
@@ -54,11 +55,11 @@
                 Invoke-WebRequest -UseBasicParsing "$release/$asset" -OutFile $target
                 $actual = (Get-FileHash -Algorithm SHA256 $target).Hash.ToLower()
                 if (-not $sums.ContainsKey($asset) -or $sums[$asset] -ne $actual) {
-                    Fail 'the downloaded helper failed its checksum; nothing was installed.'
+                    Fail 'the Pipkin download failed its checksum; nothing was installed.'
                 }
             }
             & (Join-Path $workdir 'pipkin.exe') install
-            if ($LASTEXITCODE -ne 0) { Fail "the helper could not be installed (exit $LASTEXITCODE)." }
+            if ($LASTEXITCODE -ne 0) { Fail "Pipkin could not be installed (exit $LASTEXITCODE)." }
         } finally {
             Remove-Item -Recurse -Force $workdir -ErrorAction SilentlyContinue
         }

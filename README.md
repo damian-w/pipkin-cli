@@ -48,7 +48,8 @@ Then plug in your display. Your numbers appear shortly, and Pipkin starts by
 itself each time you sign in to your computer.
 
 On a Mac, you may see a Keychain prompt asking about Claude's saved sign-in.
-Choose **Always Allow** so Pipkin can keep reading it in the background. If you
+Enter your Mac login password and choose **Always Allow** so Pipkin can keep
+reading it in the background. If you
 clicked something else, the [sign-in guide](docs/data-sources.md#existing-sign-ins)
 explains how to fix it.
 
@@ -72,15 +73,30 @@ installing so it can find `pipkin`.
 
 | Command | What it does |
 | --- | --- |
-| `pipkin status` | Checks that the helper is running and the display is connected |
-| `pipkin usage` | Shows your current usage in the terminal |
-| `pipkin restart` | Restarts the helper |
+| `pipkin status` | Checks that Pipkin is running and the display is connected |
+| `pipkin usage` | Shows your Claude and Codex allowance right now |
+| `pipkin restart` | Restarts Pipkin if the display stops updating |
 | `pipkin update` | Updates Pipkin to the latest version |
 | `pipkin flash` | Installs or updates the display's firmware |
 | `pipkin uninstall` | Removes Pipkin from your computer |
 
-On a Mac or Linux, if the terminal says `pipkin: command not found`, use
-`~/.local/bin/pipkin` instead, or add `~/.local/bin` to your PATH.
+Run `pipkin` for a short status view, or `pipkin help` for the command menu.
+`pipkin status` reads saved allowance, local task summaries and display state
+without contacting the providers; `pipkin usage` fetches current allowance and
+adds model limits, credits, extra usage and banked resets when available.
+
+Run `pipkin help <command>` for options and details. Other commands appear under
+"More" in `pipkin help`; `pipkin tasks` shows observed local Claude Code and Codex
+GUI tasks on Mac and Windows. Task coverage is partial, so observed tasks do not
+establish complete counts. Task detection needs no extra installation or sign-in.
+
+On a Mac or Linux, the installer prints a full-path command you can use straight
+away and a copy-paste PATH fix when needed. It does not edit shell startup files
+automatically. If the terminal says `pipkin: command not found`, use
+`~/.local/bin/pipkin` or the command shown by the installer.
+
+`pipkin update` updates the computer app. It can also point out newer display
+firmware using the saved display version; it never flashes the display itself.
 
 ## Updating your display
 
@@ -98,7 +114,10 @@ covers supported boards and troubleshooting.
 ## Privacy
 
 Your sign-ins stay on your computer. Pipkin sends them only to Anthropic or
-OpenAI, to read your usage. It never reads your conversations, there's no
+OpenAI, to read your usage. While awake, Pipkin also checks local task state about
+every 30 seconds. Local task detection reads GUI status metadata; Codex
+can include conversation content in its local snapshots, which Pipkin processes
+in memory and discards. Conversation text is never saved or uploaded. There's no
 telemetry or Pipkin account, and no Pipkin server ever sees your usage. Apart
 from that, it only contacts GitHub to download updates, firmware and the tool that
 installs firmware. The [data sources guide](docs/data-sources.md) has the details.
@@ -106,7 +125,8 @@ installs firmware. The [data sources guide](docs/data-sources.md) has the detail
 ## For developers
 
 Everything Pipkin reads is also available as JSON for your own scripts and
-dashboards: run `pipkin usage --json`, or see the [JSON output reference](docs/output.md).
+dashboards: run `pipkin usage --json` or `pipkin tasks --json`, or see the
+[JSON output reference](docs/output.md).
 The display talks a simple text [protocol](docs/protocol.md) over USB serial.
 
 To build from source, install the Go version listed in [go.mod](go.mod), then run:

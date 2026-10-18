@@ -1,0 +1,16 @@
+Codex (sample_plan)
+  Session               No session cap
+  Weekly                75% left  resets in 7d
+  Codex Spark weekly    20% left  resets in 2d
+  Future Model session  Unknown
+  Credits               123.45
+  Banked resets         0
+
+Claude (sample_team)
+  Session        82% left  resets in 36m
+  Weekly         60% left  resets in 3d 5h
+  Opus weekly    90% left  resets in 1d
+  Sonnet weekly  100% left  resets in 1d
+  Extra usage    12.50 of 50.00 USD used
+  Banked resets  Unknown
+  Last reading 6m ago

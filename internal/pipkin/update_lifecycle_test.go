@@ -48,8 +48,11 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 						if command.Path != installedBinary() || command.Path == source || !slices.Equal(command.Args, []string{installedBinary(), "authorize"}) {
 							t.Fatalf("authorization did not use the installed replacement: path=%q args=%q", command.Path, command.Args)
 						}
-						if command.Stdin != os.Stdin || command.Stdout != &output || command.Stderr != os.Stderr {
-							t.Fatal("authorization did not retain the foreground command's streams")
+						if command.Stdin != os.Stdin || command.Stdout == &output || command.Stderr == &output {
+							t.Fatal("authorization did not filter child output while retaining foreground input")
+						}
+						if !slices.Contains(command.Env, "PIPKIN_AUTHORIZE_NESTED=1") {
+							t.Fatal("nested authorization could restart while the installation lock is held")
 						}
 						checkTestBinary(t, command.Path, "new "+mainName)
 						checkTestBinary(t, command.Path+".old", "old "+mainName)
@@ -74,7 +77,7 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 				t.Fatalf("activation order = %v", events)
 			}
 			if denied {
-				if !strings.Contains(output.String(), "pipkin authorize") || !strings.Contains(output.String(), "pipkin restart") {
+				if !strings.Contains(output.String(), "authorize") || !strings.Contains(output.String(), "restart") {
 					t.Fatalf("authorization cancellation omitted actionable recovery: %q", output.String())
 				}
 			} else if output.Len() != 0 {
@@ -143,7 +146,7 @@ func TestRestartHelperOrdersStopBeforeStartAndPreservesErrors(t *testing.T) {
 			if !slices.Equal(events, test.want) || !errors.Is(err, test.wantErr) {
 				t.Fatalf("restart = %v, %v; want %v, %v", events, err, test.want, test.wantErr)
 			}
-			if test.startErr != nil && !strings.Contains(err.Error(), "pipkin start") {
+			if test.startErr != nil && !strings.Contains(err.Error(), "start") {
 				t.Fatalf("start failure omitted recovery: %v", err)
 			}
 		})

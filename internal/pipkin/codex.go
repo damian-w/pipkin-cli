@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -29,7 +28,7 @@ func fetchCodexUsage(ctx context.Context, salt string) (*Reading, error) {
 		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
 	}
 	data, err := requestUsage(req, "Codex", map[int]error{
-		http.StatusUnauthorized: fmt.Errorf("Codex sign-in needs refreshing in the Codex app: %w", errSignedOut),
+		http.StatusUnauthorized: signedOutError("Sign-in expired. Open Codex to sign in again."),
 	})
 	if err != nil {
 		return nil, err

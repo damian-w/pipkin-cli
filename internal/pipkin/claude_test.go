@@ -92,9 +92,6 @@ func TestClaudeSessionNotStarted(t *testing.T) {
 				if !strings.Contains(fields, "session=not_started session_id=current session_seconds=18000") || strings.Contains(fields, "session_used=") || strings.Contains(fields, "session_reset=") {
 					t.Fatalf("idle packet=%s", fields)
 				}
-				if got := describeWindow("Session", r.Session, now.Unix()); got != "Session starts with your first message" {
-					t.Fatalf("idle text=%s", got)
-				}
 			} else if !strings.Contains(fields, "session=metered") || strings.Contains(fields, "not_started") {
 				t.Fatalf("metered packet=%s", fields)
 			}

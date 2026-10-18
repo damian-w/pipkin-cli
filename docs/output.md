@@ -2,8 +2,10 @@
 
 Use `pipkin usage --json` for a fresh reading or `pipkin status --json` for the
 background helper's cached snapshot. Neither command needs a USB display.
+Use `pipkin tasks --json` for local GUI task observations on macOS and Windows.
 The schema is defined by [`Status`](../internal/pipkin/helper.go) and
-[`Reading`](../internal/pipkin/readings.go). Examples below use invented data.
+[`Reading`](../internal/pipkin/readings.go), with task observations defined by
+[`TaskSnapshot`](../internal/pipkin/tasks.go). Examples below use invented data.
 
 ## Commands and errors
 
@@ -11,8 +13,14 @@ The schema is defined by [`Status`](../internal/pipkin/helper.go) and
 | --- | --- |
 | `pipkin usage --json` | Collects both providers independently. Initializes local configuration if needed; does not update the helper's cache, retry schedule or display. |
 | `pipkin status --json` | Reads the saved snapshot and replaces `pid` with the current helper PID or zero. Does not contact providers or probe USB. |
+| `pipkin tasks --json` | Reads existing local GUI task state with a bounded collection budget. Does not contact provider servers, read credentials, start chats or require an installed/running Pipkin helper. |
 | `pipkin usage` | Human-readable fresh usage and provider errors. |
-| `pipkin status` | Human-readable helper, display and cached allowance status. |
+| `pipkin status` | Human-readable helper, display, cached allowance and local task summaries. Does not create settings or lock files. |
+| `pipkin tasks` | Human-readable observed task counts, with partial coverage or unknown counts stated explicitly. |
+
+Bare `pipkin` shows the short status view and a help hint when installed. It
+shows the command menu when the installation is absent or its location cannot be
+resolved. `pipkin help`, `-h` and `--help` always show the menu.
 
 JSON commands write one indented object and a newline to stdout. Read the whole
 object after the command exits and keep stderr separate. Text output and object
@@ -20,13 +28,36 @@ key order are not interfaces.
 
 | Exit status | Meaning |
 | --- | --- |
-| `0` | Command completed. Either provider may still have failed; inspect `states` and errors. Cached status may have `pid: 0`. |
+| `0` | Command completed. Provider data can still be unavailable; inspect `states` and errors for allowance or provider `coverage` for tasks. Cached status may have `pid: 0`. |
 | `1` | Command failed, for example due to invalid arguments, unreadable configuration or a missing/malformed snapshot. stderr contains `pipkin: ...`; no JSON error envelope is emitted. |
-| `2` | Unknown command; stderr contains an error and help. |
+| `2` | Unknown command; stderr contains an error and a suggested command or help. Suggestions never run a command. |
 
 `status --json` reports a missing or unreadable snapshot as “no helper snapshot
 yet” and suggests `usage --json`. Provider errors alone do not change the exit
 status of `usage --json`.
+
+The text views use aligned provider rows. `status` shows Session and Weekly;
+`usage` adds reported plan slugs, model limits, credits, extra-usage spend and
+limits, and banked resets. Unknown amounts remain unknown; confirmed zero
+balances remain visible. A missing sign-in is a calm state, while expired or
+mismatched sign-ins include a next step. These presentation changes do not alter
+the JSON schema or which sources each command reads; error wording is not a
+stable interface.
+
+Reset countdowns omit zero units, for example `36m` or `7d`. Readings at least
+five minutes old show their age. Failed reads with retained quota are labelled
+"Last known reading"; expired resets say "awaiting refresh" without refilling the
+allowance. `usage` prints a one-line progress message only to an interactive
+stderr stream, and never in JSON mode.
+
+Text status distinguishes not installed, stopped and starting. A missing snapshot
+or one belonging to the previous helper can mean starting; malformed or unreadable
+state remains an error. Display diagnostics use saved connection information and
+do not probe USB. A saved port-open error describes the last connection attempt.
+The local task summary uses only fresh saved observations, deduplicates task IDs,
+and labels partial, unavailable or unsupported coverage. Stopped or starting
+helpers do not supply current counts. Run `pipkin tasks` for a fresh local check
+on macOS or Windows; the plain status view never opens a GUI connection.
 
 ## Snapshot
 
@@ -44,6 +75,7 @@ version. Providers are keyed as `codex` and `claude` and can appear independentl
 | `readings` | Provider → reading, always | Fresh usage includes both providers, with placeholders on failure. Helper startup may have `{}` or only one provider. |
 | `codex_error`, `claude_error` | String; omitted when empty | Latest collection error. Wording is not a stable error code. |
 | `updated` | Unix seconds, always | Collection start time for fresh usage; last changed snapshot time for the helper. |
+| `tasks` | Task snapshot; omitted before the first local task scan and in fresh usage | Local GUI task observations, independent of subscription availability. See below. |
 
 A connected `device` contains string fields `port` and `firmware`. A failed
 port-open attempt can supply `error`. `{}` means no recorded connection or error;
@@ -79,6 +111,82 @@ need not share an observation time.
 
 For a continuously visible UI, read cached status and update countdowns locally.
 Repeated `usage --json` calls make new requests without the helper's backoff.
+
+## Local GUI tasks
+
+`pipkin tasks --json` returns one object with `schema_version: 1`, `observed_at`
+(Unix seconds), and a `providers` object keyed by `claude` and `codex`. Each
+provider has only `coverage` and `tasks`. Task records contain only:
+
+| Field | Type / presence | Meaning |
+| --- | --- | --- |
+| `id` | String, always | Stable opaque provider-scoped task identity. Does not contain a title, path, prompt, PID or raw task ID. |
+| `updated_at` | Unix seconds or null, always | Native source update time where known. May reflect activity rather than the exact status transition; never use it as a heartbeat or failure timeout. |
+| `status` | String, always | `working`, `needs_attention`, `blocked`, `idle` or `unknown`. |
+
+`coverage: "partial"` means these are observed tasks, not an exhaustive list.
+Observed counts can omit tasks. Missing statuses do not establish zero counts.
+`coverage: "unavailable"` means no usable
+observations were collected, including an absent/closed GUI, denied access,
+unsupported local storage/protocol, malformed state or an expired collection
+budget. It does not distinguish those causes or establish an absent task.
+`coverage: "unsupported"` applies to Linux task detection. Both unavailable and
+unsupported providers emit `tasks: null`; they never emit an authoritative empty
+list or synthetic zero counts.
+
+Claude covers verified live local Code engines belonging to Claude Desktop.
+Its native latest-turn `blocked`/`need_input` summaries, after applying a current
+turn wrap-up's request for user input or clearing, mean human attention and map
+to `needs_attention`, even when the engine is idle. They are model-derived
+summaries, not proof of terminal failure. Ordinary Claude Chat and Cowork are
+outside this source's verified scope. A stopped engine is not a blocked task.
+
+Codex combines already-announced GUI streams with bounded existing-owner queries
+for recent persisted root candidates. Catalog history alone is not live state.
+Some background and ephemeral chats can be undiscovered, and unsupported or
+ambiguous state remains unknown. Structured unanswered native question cards
+can mean `needs_attention` even when runtime is idle and the turn is completed.
+Questions can remain pending across later turns. Accepted replies clear that
+signal; gaps in loaded history leave unresolved older questions unknown.
+Skip and dismissal state is held only in the GUI renderer and is not available
+through this source, so an unanswered dismissed card can still produce an
+attention signal. Unread completion alone does not imply attention, and a plan
+implementation offer is nonblocking.
+Known approval/input waits also mean `needs_attention`. Only an explicit fresh
+Codex runtime `systemError` means `blocked`; old failed turns, recoverable tool
+errors, blocked goals, cancellation, missing streams and silence do not.
+Terminal failure delivery has not been validated with a natural live error.
+
+The helper scans local tasks about every 30 seconds while awake, independently
+of USB and allowance polling. It caches the same object under `status.tasks`.
+Wake and clock-generation changes invalidate cached task lists and discard
+earlier in-flight results before publishing a fresh collection.
+`status --json` invalidates task lists when the helper is stopped, the observation
+is over 37 seconds old, or its time is in the future: coverage becomes unavailable
+and tasks become null, with the original `observed_at` retained. Old helper
+snapshots may omit tasks entirely. A direct task check does not update the cache
+or the physical display. Existing installation and USB protocol are unchanged.
+
+Example with invented data:
+
+```json
+{
+  "schema_version": 1,
+  "observed_at": 1800000000,
+  "providers": {
+    "claude": {"coverage": "unavailable", "tasks": null},
+    "codex": {
+      "coverage": "partial",
+      "tasks": [
+        {"id": "codex:opaque-example", "updated_at": null, "status": "needs_attention"}
+      ]
+    }
+  }
+}
+```
+
+Unknown future statuses should be treated as unknown. Task status and allowance
+availability are separate; task collection never makes provider HTTPS requests.
 
 ## Reading fields
 
@@ -241,8 +349,8 @@ time remains unchanged; Claude's old quota is cleared. If the helper stops,
     },
     "claude": {"account": "claude", "session": null, "weekly": null}
   },
-  "codex_error": "Codex usage request failed; check your connection",
-  "claude_error": "Claude sign-in expired; open Claude to renew it",
+  "codex_error": "Can't reach Codex. Check your internet connection.",
+  "claude_error": "Sign-in expired. Open Claude to sign in again.",
   "updated": 1790684400
 }
 ```

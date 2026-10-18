@@ -38,8 +38,14 @@ func runFlashProcessInJob(command *exec.Cmd, terminateJob func(windows.Handle, u
 	}
 	// A PyInstaller child can acquire the serial port. Start its parent suspended
 	// so it cannot create a child before assignment to this private, non-breakaway
-	// job. KILL_ON_JOB_CLOSE also covers an explicit termination failure.
-	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_SUSPENDED}
+	// job. A separate process group disables console Ctrl-C for the tool and its
+	// descendants; cancellation and deadlines still terminate the whole job.
+	// KILL_ON_JOB_CLOSE also covers an explicit termination failure.
+	// https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+	command.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP,
+	}
 	var mu sync.Mutex
 	assigned, cancelled := false, false
 	command.Cancel = func() error {

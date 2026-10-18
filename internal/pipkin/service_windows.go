@@ -151,12 +151,8 @@ func updateUserPath(folder string, remove bool) error {
 
 func serialPermissionHint() string { return "" }
 
-func removeInstallation() error {
-	dir, err := resolvedAppDir()
-	if err != nil {
-		return err
-	}
-	tombstone, err := stageInstallationRemoval(dir)
+func removeInstallation(target removalTarget) error {
+	tombstone, err := stageVerifiedInstallationRemoval(target)
 	if err != nil || tombstone == "" {
 		return err
 	}
@@ -166,7 +162,7 @@ func removeInstallation() error {
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true,
 		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NO_WINDOW}
 	if err := command.Start(); err != nil {
-		return errors.Join(err, os.Rename(tombstone, dir))
+		return errors.Join(err, os.Rename(tombstone, target.dir))
 	}
 	return command.Process.Release()
 }

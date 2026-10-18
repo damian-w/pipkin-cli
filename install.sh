@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the Pipkin helper on macOS or Linux:
+# Installs Pipkin on macOS or Linux:
 #   curl -fsSL https://pipkin.io/install.sh | sh
 set -eu
 
@@ -47,7 +47,8 @@ release="$base/releases/download/$tag"
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' 0
 trap 'exit 1' INT TERM
-curl -fsSL "$release/$asset" -o "$workdir/pipkin" || fail "could not download the helper."
+printf 'Downloading Pipkin %s...\n' "${tag#v}"
+curl -fsSL "$release/$asset" -o "$workdir/pipkin" || fail "could not download Pipkin. Check your internet connection."
 curl -fsSL "$release/SHA256SUMS" -o "$workdir/SHA256SUMS" || fail "could not download checksums."
 
 expected=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1 }' "$workdir/SHA256SUMS")
@@ -57,7 +58,7 @@ else
     actual=$(shasum -a 256 "$workdir/pipkin" | cut -d ' ' -f 1)
 fi
 [ -n "$expected" ] && [ "$expected" = "$actual" ] ||
-    fail "the downloaded helper failed its checksum; nothing was installed."
+    fail "the Pipkin download failed its checksum; nothing was installed."
 
 chmod +x "$workdir/pipkin"
 "$workdir/pipkin" install "$@"

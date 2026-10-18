@@ -18,63 +18,30 @@ import (
 var repository = envOr("PIPKIN_REPOSITORY", "damian-w/pipkin-cli")
 
 func installCommand() error {
-	source, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	if resolved, err := filepath.EvalSymlinks(source); err == nil {
-		source = resolved
-	}
-	lock, err := acquireFileLock(installationLockPath())
-	if err != nil {
-		return fmt.Errorf("could not lock installation: %w", err)
-	}
-	defer lock.Close()
-	staged, err := stageLocalBinaries(source, filepath.Dir(installedBinary()), runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		return fmt.Errorf("could not prepare the helper: %w", err)
-	}
-	defer staged.close()
-	needsLauncher, err := launcherMissing()
-	if err != nil {
-		return err
-	}
-	if _, err := initializedConfig(); err != nil {
-		return err
-	}
-	launcherCreated := false
-	actions := helperInstallationActions()
-	actions.configure = func() error {
-		// PATH may be written even if notifying Windows fails; roll it back too.
-		launcherCreated = needsLauncher
-		return installLauncher()
-	}
-	actions.undoConfigure = func() error {
-		if !launcherCreated {
-			return nil
-		}
-		return removeLauncher()
-	}
-	mechanism, err := activateBinaries(staged, actions)
-	if err != nil {
-		return fmt.Errorf("could not install the helper: %w", err)
-	}
-	fmt.Printf("Installed Pipkin helper %s.\n", version)
-	fmt.Println("Codex and Claude usage is detected automatically from your existing app sessions.")
-	fmt.Printf("Starts automatically via %s.\n", mechanism)
-	fmt.Println("Helper running.")
-	if runtime.GOOS == "windows" && staged.missingCompanion {
-		fmt.Println("No windowless helper was supplied; startup uses the console helper.")
-	}
-	if runtime.GOOS == "windows" {
-		fmt.Println("Open a new terminal to use the `pipkin` command.")
-	} else if !onPath(filepath.Dir(launcherPath())) {
-		fmt.Println("Add ~/.local/bin to your PATH, or run ~/.local/bin/pipkin directly.")
-	}
-	if hint := serialPermissionHint(); hint != "" {
-		fmt.Println(hint)
-	}
-	return nil
+	home, _ := os.UserHomeDir()
+	return runInstallCommand(os.Stdout, installCommandDeps{
+		buildVersion: version, goos: runtime.GOOS,
+		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
+		stage: func() (*stagedBinaries, error) {
+			source, err := os.Executable()
+			if err != nil {
+				return nil, err
+			}
+			if resolved, err := filepath.EvalSymlinks(source); err == nil {
+				source = resolved
+			}
+			return stageLocalBinaries(source, filepath.Dir(installedBinary()), runtime.GOOS, runtime.GOARCH)
+		},
+		launcherMissing: launcherMissing, config: initializedInstallConfig,
+		actions: helperInstallationActions(), activate: activateBinaries,
+		configure: installLauncher, undo: removeLauncher,
+		authorize: func(noticeOut, warningOut io.Writer) {
+			authorizeInstalledHelperWithNoticeFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, noticeOut, warningOut)
+		},
+		hint: commandHint, pathFix: installPathFix(runtime.GOOS, launcherPath(), onPath(filepath.Dir(launcherPath()))),
+		persistentPathFix: installPersistentPathFix(runtime.GOOS, os.Getenv("SHELL"), home, os.Getenv("ZDOTDIR"), launcherPath(), onPath(filepath.Dir(launcherPath()))),
+		permissionHint:    serialPermissionHint,
+	})
 }
 
 func onPath(folder string) bool {
@@ -86,29 +53,6 @@ func onPath(folder string) bool {
 	return false
 }
 
-func describeWindow(label string, window *Window, now int64) string {
-	label = terminalText(label)
-	if window == nil {
-		return label + " unknown"
-	}
-	if window.NotStarted {
-		return label + " starts with your first message"
-	}
-	text := fmt.Sprintf("%s %.0f%% left", label, float64(1000-window.Used)/10)
-	if window.Reset != 0 {
-		left := window.Reset - now
-		switch {
-		case left <= 0:
-			text += " (awaiting refresh)"
-		case left >= 86400:
-			text += fmt.Sprintf(" (resets in %dd %dh)", left/86400, left%86400/3600)
-		default:
-			text += fmt.Sprintf(" (resets in %dh %dm)", left/3600, left%3600/60)
-		}
-	}
-	return text
-}
-
 func terminalText(value string) string {
 	return strings.Map(func(r rune) rune {
 		if !unicode.IsPrint(r) {
@@ -118,118 +62,77 @@ func terminalText(value string) string {
 	}, value)
 }
 
-func statusCommand(args []string) error {
-	if len(args) == 1 {
-		return statusJSONCommand()
-	}
-	_, err := os.Stat(installedBinary())
-	installed := err == nil
-	pid, err := runningPID()
-	if err != nil {
-		return err
-	}
-	switch {
-	case pid != 0:
-		fmt.Printf("Pipkin helper %s: running (pid %d)\n", version, pid)
-	case installed:
-		fmt.Printf("Pipkin helper %s: stopped. Start it with `pipkin start`.\n", version)
-		return nil
-	default:
-		fmt.Printf("Pipkin helper %s: not installed\n", version)
-		return nil
-	}
-	var status Status
-	if err := readJSON(statusPath(), &status); err != nil {
-		return fmt.Errorf("could not read helper snapshot: %w", err)
-	}
-	if port := status.Device["port"]; port != "" {
-		fmt.Printf("  Display: connected on %s (firmware %s)\n", port, status.Device["firmware"])
-	} else if reason := status.Device["error"]; reason != "" {
-		fmt.Printf("  Display: not found (%s)\n", reason)
-	} else {
-		fmt.Println("  Display: not found")
-	}
-	now := time.Now().Unix()
-	for _, provider := range []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude"}} {
-		reading := status.Readings[provider.key]
-		switch {
-		case reading != nil:
-			session := describeWindow("session", reading.Session, now)
-			if reading.SessionNoCap {
-				session = "session no cap"
-			}
-			line := session + ", " +
-				describeWindow("weekly", reading.Weekly, now)
-			if reading.Observed != 0 {
-				line += fmt.Sprintf(", read %d min ago", (now-reading.Observed)/60)
-			}
-			if message := status.providerError(provider.key); message != "" {
-				line += "; " + message
-			}
-			fmt.Printf("  %s: %s\n", provider.name, line)
-		case status.providerError(provider.key) != "":
-			fmt.Printf("  %s: no reading (%s)\n", provider.name, status.providerError(provider.key))
-		default:
-			fmt.Printf("  %s: no reading yet\n", provider.name)
-		}
-	}
-	return nil
-}
-
 func startCommand() error {
 	maintenance, err := acquireFileLock(maintenanceLockPath())
 	if err != nil {
-		return fmt.Errorf("could not start the helper while firmware maintenance is in progress: %w", err)
+		return commandLockError("start", err)
 	}
 	maintenance.Close()
 	if _, err := os.Stat(installedBinary()); err != nil {
-		return errors.New("Pipkin is not installed")
+		return errors.New("Pipkin is not installed. Run 'pipkin install' first.")
 	}
-	if err := startHelper(); err != nil {
+	running, err := helperRunning()
+	if err != nil {
 		return err
 	}
-	fmt.Println("Pipkin helper running.")
+	if err := startHelper(); err != nil {
+		return commandPhaseError{message: "Pipkin couldn't start. Check its diagnostic log and the details below.", cause: err}
+	}
+	if running {
+		fmt.Println("Pipkin is already running.")
+	} else {
+		fmt.Println("Pipkin is running.")
+	}
 	return nil
 }
 
 func stopCommand() error {
-	if err := stopHelper(); err != nil {
+	running, err := helperRunning()
+	if err != nil {
 		return err
 	}
-	fmt.Println("Pipkin helper stopped. It starts again at next sign-in; `pipkin start` resumes now.")
+	if err := stopHelper(); err != nil {
+		return commandPhaseError{message: "Pipkin couldn't stop. Check the details below before trying again.", cause: err}
+	}
+	if running {
+		fmt.Println("Pipkin is stopped. It starts again when you next log in to this computer.")
+	} else {
+		fmt.Println("Pipkin was already stopped.")
+	}
+	fmt.Printf("To start it now: %s\n", commandHint("start"))
 	return nil
 }
 
 func restartCommand() error {
 	lock, err := acquireFileLock(installationLockPath())
 	if err != nil {
-		return fmt.Errorf("could not restart the helper during another installation or firmware operation: %w", err)
+		return commandLockError("restart", err)
 	}
 	defer lock.Close()
 	if _, err := os.Stat(installedBinary()); err != nil {
-		return errors.New("Pipkin is not installed")
+		return errors.New("Pipkin is not installed. Run 'pipkin install' first.")
 	}
 	maintenance, err := acquireFileLock(maintenanceLockPath())
 	if err != nil {
-		return fmt.Errorf("could not restart the helper while firmware maintenance is in progress: %w", err)
+		return commandLockError("restart", err)
 	}
 	// runCommand needs this lock before it can publish the new helper's PID.
 	if err := maintenance.Close(); err != nil {
 		return err
 	}
 	if err := restartHelper(stopHelper, startHelper); err != nil {
-		return err
+		return commandPhaseError{message: "Pipkin couldn't restart. Check its diagnostic log and the details below.", cause: err}
 	}
-	fmt.Println("Pipkin helper restarted.")
+	fmt.Println("Pipkin is running again.")
 	return nil
 }
 
 func restartHelper(stop, start func() error) error {
 	if err := stop(); err != nil {
-		return fmt.Errorf("could not stop the helper for restart: %w", err)
+		return fmt.Errorf("Couldn't stop Pipkin for restart: %w", err)
 	}
 	if err := start(); err != nil {
-		return fmt.Errorf("could not restart the helper; run pipkin start to try again: %w", err)
+		return fmt.Errorf("Couldn't restart Pipkin. Run %s to try again: %w", commandHint("start"), err)
 	}
 	return nil
 }
@@ -239,15 +142,22 @@ func authorizeInstalledHelper() {
 }
 
 func authorizeInstalledHelperFor(goos string, signedIn func() bool, run func(*exec.Cmd) error, output io.Writer) {
+	authorizeInstalledHelperWithNoticeFor(goos, signedIn, run, output, output)
+}
+
+func authorizeInstalledHelperWithNoticeFor(goos string, signedIn func() bool, run func(*exec.Cmd) error, noticeOut, warningOut io.Writer) {
 	if goos != "darwin" || !signedIn() {
 		return
 	}
 	// The updater is still the old executable. Keychain permission must be given
 	// to the replacement at its final path, before its first background read.
 	command := exec.Command(installedBinary(), "authorize")
-	command.Stdin, command.Stdout, command.Stderr = os.Stdin, output, os.Stderr
+	var capturedError cappedBuffer
+	capturedError.limit = 8 << 10
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, newAuthorizeNoticeWriter(noticeOut), &capturedError
+	command.Env = append(os.Environ(), "PIPKIN_AUTHORIZE_NESTED=1")
 	if run(command) != nil {
-		fmt.Fprintln(output, "Claude permission is not ready; run pipkin authorize, then pipkin restart to try again.")
+		fmt.Fprintf(warningOut, "Claude sign-in access is not ready. Run %s, then %s.\n", commandHint("authorize"), commandHint("restart"))
 	}
 }
 
@@ -300,57 +210,27 @@ func newerVersion(candidate, current string) bool {
 }
 
 func updateCommand() error {
-	tag, err := latestTag()
-	if err != nil {
-		return fmt.Errorf("update check failed: %w", err)
-	}
-	if !newerVersion(tag, version) {
-		fmt.Printf("Pipkin helper %s is up to date.\n", version)
-		return nil
-	}
-	lock, err := acquireFileLock(installationLockPath())
-	if err != nil {
-		return fmt.Errorf("could not lock installation: %w", err)
-	}
-	defer lock.Close()
-	release := fmt.Sprintf("https://github.com/%s/releases/download/%s", repository, tag)
-	staged, err := stageReleaseBinaries(release, filepath.Dir(installedBinary()), runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		return fmt.Errorf("update failed: %w; installed binaries were unchanged", err)
-	}
-	defer staged.close()
-	if _, err := initializedConfig(); err != nil {
-		return err
-	}
-	if _, err := activateBinaries(staged, helperInstallationActions()); err != nil {
-		return fmt.Errorf("update failed: %w", err)
-	}
-	fmt.Printf("Updated Pipkin helper %s -> %s.\n", version, strings.TrimPrefix(tag, "v"))
-	return nil
+	return runUpdateCommand(os.Stdout, updateCommandDeps{
+		buildVersion: version, latest: latestTag,
+		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
+		stage: func(tag string) (*stagedBinaries, error) {
+			release := fmt.Sprintf("https://github.com/%s/releases/download/%s", repository, tag)
+			return stageReleaseBinaries(release, filepath.Dir(installedBinary()), runtime.GOOS, runtime.GOARCH)
+		},
+		config: initializedConfig, actions: helperInstallationActions(), activate: activateBinaries,
+		authorize: func(noticeOut, warningOut io.Writer) {
+			authorizeInstalledHelperWithNoticeFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, noticeOut, warningOut)
+		},
+		advisory: func(out io.Writer) error {
+			return writeFirmwareAdvisory(out, cachedDisplayFirmware, latestFirmwareAdvisoryTag, commandHint)
+		},
+	})
 }
 
 func uninstallCommand() error {
-	lock, err := acquireFileLock(installationLockPath())
-	if err != nil {
-		return fmt.Errorf("could not lock installation: %w", err)
-	}
-	defer lock.Close()
-	if err := stopHelper(); err != nil {
-		return err
-	}
-	if err := removeAutostart(); err != nil {
-		return err
-	}
-	if err := removeLauncher(); err != nil {
-		return err
-	}
-	if err := removeInstallation(); err != nil {
-		return err
-	}
-	if runtime.GOOS == "windows" {
-		fmt.Println("Pipkin helper removal scheduled after this command exits.")
-	} else {
-		fmt.Println("Pipkin helper removed.")
-	}
-	return nil
+	return runUninstallCommand(os.Stdout, uninstallDependencies{
+		goos: runtime.GOOS, target: installationRemovalTarget,
+		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
+		stop: stopHelper, startup: removeAutostart, launcher: removeLauncher, remove: removeInstallation,
+	})
 }
