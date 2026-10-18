@@ -146,7 +146,7 @@ func TestHelperTaskPollingIsAsynchronousAndIndependentOfUSB(t *testing.T) {
 	// Join the completed worker through its result channel, without sleeping.
 	result := <-h.taskResults
 	h.taskResults <- result
-	h.pollTasks(context.Background(), now.Add(2*time.Second))
+	h.pollTasks(context.Background(), now.Add(time.Second))
 	if h.taskPending || h.tasks == nil {
 		t.Fatal("completed task scan was not cached")
 	}
@@ -211,5 +211,79 @@ func TestHelperTaskRejectsPreWakeResults(t *testing.T) {
 	h.pollTasks(context.Background(), clock.Add(time.Second))
 	if h.taskPending || h.tasks.Providers["claude"].Tasks[0].ID != "claude:fresh" {
 		t.Fatal("the post-wake observation was not accepted")
+	}
+}
+
+func TestHelperTasksRenewOnStatusChangeAndEveryRefresh(t *testing.T) {
+	h, _ := testHelper()
+	h.taskResults = make(chan taskCollectionResult, 1)
+	start := h.now()
+	poll := func(at time.Time, status string) *TaskSnapshot {
+		t.Helper()
+		h.collectTasks = func(context.Context) TaskSnapshot {
+			return TaskSnapshot{SchemaVersion: 1, ObservedAt: at.Unix(), Providers: map[string]TaskProvider{
+				"claude": {Coverage: "partial", Tasks: []Task{{ID: "claude:one", Status: status}}}}}
+		}
+		h.due["tasks"] = time.Time{}
+		h.pollTasks(context.Background(), at)
+		result := <-h.taskResults
+		h.taskResults <- result
+		h.due["tasks"] = at.Add(time.Hour)
+		h.pollTasks(context.Background(), at)
+		return h.tasks
+	}
+	first := poll(start, "working")
+	if poll(start.Add(taskPollEvery), "working") != first || poll(start.Add(taskRefreshEvery-time.Second), "working") != first {
+		t.Fatal("an unchanged read renewed the cache before the refresh interval")
+	}
+	changed := poll(start.Add(taskRefreshEvery-time.Second), "needs_attention")
+	if changed == first || changed.ObservedAt != start.Add(taskRefreshEvery-time.Second).Unix() {
+		t.Fatal("a status change waited for the refresh interval")
+	}
+	if renewed := poll(time.Unix(changed.ObservedAt, 0).Add(taskRefreshEvery), "needs_attention"); renewed == changed {
+		t.Fatal("unchanged statuses were never renewed")
+	}
+}
+
+func TestHelperTasksPauseWhileAsleepAndWakeOnCodexChange(t *testing.T) {
+	h, _ := testHelper()
+	h.taskResults = make(chan taskCollectionResult, 1)
+	h.taskWake = make(chan struct{}, 1)
+	h.collectTasks = func(context.Context) TaskSnapshot {
+		return TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{"codex": {Coverage: "unavailable"}}}
+	}
+	var changed func()
+	closed := 0
+	h.startCodexWatch = func(_ context.Context, notify func()) *codexTaskWatch {
+		changed = notify
+		return &codexTaskWatch{cancel: func() { closed++ }}
+	}
+	now := h.now()
+	h.pollTasks(context.Background(), now)
+	<-h.taskWake // the finished read wakes the loop
+	h.pollTasks(context.Background(), now)
+	if h.codexWatch.Load() == nil || h.taskPending || !h.tasksCurrent {
+		t.Fatal("polling did not start a Codex watch and cache the read")
+	}
+	changed()
+	select {
+	case <-h.taskWake:
+	default:
+		t.Fatal("a Codex change did not wake the helper loop")
+	}
+	h.pollTasks(context.Background(), now)
+	if !h.taskPending {
+		t.Fatal("a Codex change waited for the next poll")
+	}
+	result := <-h.taskResults
+	h.taskResults <- result
+	h.power.displaySleeping = true
+	h.pollTasks(context.Background(), now)
+	if h.codexWatch.Load() != nil || closed != 1 || h.tasksCurrent || h.tasks.Providers["codex"].Coverage != "unavailable" {
+		t.Fatal("task reads kept running while the display slept")
+	}
+	h.pollTasks(context.Background(), now.Add(time.Minute))
+	if len(h.taskResults) != 1 || h.codexWatch.Load() != nil {
+		t.Fatal("a sleeping host started a task read")
 	}
 }

@@ -17,8 +17,11 @@ import (
 
 const (
 	taskCollectionBudget = 5 * time.Second
-	taskPollEvery        = 30 * time.Second
-	taskFreshFor         = 45 * time.Second // matches the display's task expiry
+	// The helper reads Claude every taskPollEvery and watches Codex live. Unchanged
+	// statuses renew the cache and display every taskRefreshEvery.
+	taskPollEvery    = 2 * time.Second
+	taskRefreshEvery = 15 * time.Second
+	taskFreshFor     = 45 * time.Second // matches the display's task expiry
 )
 
 // Task holds only status metadata. UpdatedAt is the source's time, not a heartbeat.
@@ -166,6 +169,13 @@ var taskProviders = []struct{ key, name string }{{"codex", "Codex"}, {"claude", 
 type taskStatus struct{ key, label string }
 
 var taskStatuses = []taskStatus{{"working", "working"}, {"needs_attention", "waiting for you"}, {"blocked", "blocked"}, {"idle", "idle"}, {"unknown", "status unknown"}}
+
+// sameTaskStatuses compares normalized providers by coverage and each task's status.
+func sameTaskStatuses(a, b TaskProvider) bool {
+	return a.Coverage == b.Coverage && slices.EqualFunc(a.Tasks, b.Tasks, func(x, y Task) bool {
+		return x.ID == y.ID && x.Status == y.Status
+	})
+}
 
 // taskSummary counts a provider's tasks by status, or returns "" when none were seen.
 func taskSummary(p TaskProvider) string {

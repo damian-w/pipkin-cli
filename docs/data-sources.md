@@ -64,10 +64,11 @@ settings.
 ## Tasks
 
 On macOS and Windows, Pipkin reads task status from the Claude and Codex
-desktop apps: Claude Code's local session list and status files, and the Codex
-app's local connection. Codex sends whole conversations over that connection.
-Pipkin keeps only each task's ID, update time and status, and discards the rest
-in memory. Prompts, titles and conversation text are never saved, shown or sent,
+desktop apps: Claude Code's local session list and status files, read every 2
+seconds, and the Codex app's local connection, which the helper keeps open while
+the computer is awake so changes arrive as they happen. Codex sends whole
+conversations and their updates over that connection. Pipkin keeps only each
+task's ID, update time and status, and discards the rest in memory. Prompts, titles and conversation text are never saved, shown or sent,
 and Pipkin doesn't scan transcript files.
 
 Task detection doesn't use your sign-ins, contact the providers, install
@@ -89,7 +90,7 @@ can override this location; Linux also respects `XDG_DATA_HOME`.
 
 Snapshots can include plan, allowance and model limits, reading and reset times,
 banked resets, the hashed account reference and other provider-reported usage
-details, plus task statuses refreshed about every 30 seconds. Raw provider
+details, plus task statuses, saved when they change and at least every 15 seconds. Raw provider
 responses are not saved. Logs can include diagnostic errors, local file paths and
 display connection details. Each snapshot replaces the previous one, and the log
 rotates as it grows. Pipkin does not upload or cloud-sync

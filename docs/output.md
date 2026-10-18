@@ -127,16 +127,19 @@ open in the Codex app. Some background chats can be missed, internal subagent
 threads are excluded, and a dismissed question card can still show as
 `needs_attention`.
 
-The helper refreshes tasks about every 30 seconds while awake and saves them as
-`tasks` in the status snapshot. It is omitted before the first check and by
+While the computer is awake, the helper reads Claude tasks every 2 seconds and
+keeps a live connection to the Codex app, so changes show within a couple of
+seconds. It saves them as `tasks` in the status snapshot when a status changes
+and at least every 15 seconds. It is omitted before the first check and by
 older helpers. Sleep and wake discard earlier results. `status --json` reports
 every provider as `unavailable` with `tasks: null` when the helper is stopped or
 the check is 45 seconds old or more, or in the future, keeping the original
 `observed_at`. The display uses the same 45-second limit.
 
-`pipkin tasks` never updates the cache or the display. The helper sends each
-fresh check to a display that reports protocol 2, with only each provider's
-coverage and its working, needs-attention and blocked counts. See the
+`pipkin tasks` never updates the cache or the display. The helper sends a
+display that reports protocol 2 only each provider's coverage and its working,
+needs-attention and blocked counts, when they change and at least every 15
+seconds. See the
 [display protocol](protocol.md#local-tasks).
 
 ```json

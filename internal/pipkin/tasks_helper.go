@@ -14,6 +14,9 @@ type taskCollectionResult struct {
 	generation uint64
 }
 
+// Ticker jitter must not skip a poll.
+const taskPollSlack = 250 * time.Millisecond
+
 func (h *Helper) invalidateTasks(now time.Time) {
 	h.tasks = readableTaskSnapshot(h.tasks, false, now)
 	h.tasksCurrent = false
@@ -21,12 +24,29 @@ func (h *Helper) invalidateTasks(now time.Time) {
 	if h.taskCancel != nil {
 		h.taskCancel()
 	}
+	// A fresh Codex watch starts on the next poll.
+	if watch := h.codexWatch.Swap(nil); watch != nil {
+		watch.close()
+	}
+	h.codexChanged.Store(false)
 }
 
 // pollTasks collects in the background so a slow app never delays the display.
+// Claude is read every taskPollEvery; Codex comes from its live watch, and a
+// change there polls at once. Task reads pause while the host sleeps.
 func (h *Helper) pollTasks(ctx context.Context, now time.Time) {
 	if h.collectTasks == nil || ctx.Err() != nil {
 		return
+	}
+	if h.power.asleep() {
+		if h.tasksCurrent || h.codexWatch.Load() != nil {
+			h.invalidateTasks(now)
+		}
+		return
+	}
+	h.watchCodexTasks(ctx)
+	if h.codexChanged.Swap(false) {
+		h.due["tasks"] = time.Time{}
 	}
 	select {
 	case result := <-h.taskResults:
@@ -36,7 +56,13 @@ func (h *Helper) pollTasks(ctx context.Context, now time.Time) {
 			h.taskCancel = nil
 		}
 		if result.generation == h.generation {
-			h.tasks, h.tasksCurrent = &result.snapshot, true
+			// Keep the earlier observation while statuses hold, so the cache and
+			// display renew on change and every taskRefreshEvery, not every read.
+			if !h.tasksCurrent || h.tasks == nil || !sameTaskSnapshot(h.tasks, &result.snapshot) ||
+				result.snapshot.ObservedAt-h.tasks.ObservedAt >= int64(taskRefreshEvery/time.Second) {
+				h.tasks = &result.snapshot
+			}
+			h.tasksCurrent = true
 		} else {
 			// A result from before sleep is stale; collect again.
 			h.due["tasks"] = time.Time{}
@@ -47,18 +73,69 @@ func (h *Helper) pollTasks(ctx context.Context, now time.Time) {
 		return
 	}
 	h.taskPending = true
-	h.due["tasks"] = now.Add(taskPollEvery)
+	h.due["tasks"] = now.Add(taskPollEvery - taskPollSlack)
 	workCtx, cancel := context.WithCancel(ctx)
 	h.taskCancel = cancel
-	collect, results, generation := h.collectTasks, h.taskResults, h.generation
+	collect, results, generation, wake := h.collectTasks, h.taskResults, h.generation, h.taskWake
 	go func() {
 		result := collect(workCtx)
 		cancel()
 		select {
 		case results <- taskCollectionResult{snapshot: result, generation: generation}:
+			signalTasks(wake)
 		case <-ctx.Done():
 		}
 	}()
+}
+
+func (h *Helper) watchCodexTasks(ctx context.Context) {
+	if h.startCodexWatch == nil || h.codexWatch.Load() != nil {
+		return
+	}
+	wake := h.taskWake
+	h.codexWatch.Store(h.startCodexWatch(ctx, func() {
+		h.codexChanged.Store(true)
+		signalTasks(wake)
+	}))
+}
+
+// collectLiveTasks reads Claude afresh and takes Codex from the live watch.
+func (h *Helper) collectLiveTasks(ctx context.Context) TaskSnapshot {
+	return collectTasksWith(ctx, time.Now, taskCollectors{
+		"claude": collectClaudeTasks,
+		"codex": func(context.Context) TaskProvider {
+			if watch := h.codexWatch.Load(); watch != nil {
+				return watch.current()
+			}
+			_, coverage := codexDesktopTasks()
+			if coverage != "unsupported" {
+				coverage = "unavailable"
+			}
+			return TaskProvider{Coverage: coverage}
+		},
+	})
+}
+
+// signalTasks wakes the helper loop without blocking; one pending wake is enough.
+func signalTasks(wake chan struct{}) {
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// sameTaskSnapshot compares every provider's coverage and task statuses.
+func sameTaskSnapshot(a, b *TaskSnapshot) bool {
+	if len(a.Providers) != len(b.Providers) {
+		return false
+	}
+	for provider, value := range a.Providers {
+		other, ok := b.Providers[provider]
+		if !ok || !sameTaskStatuses(value, other) {
+			return false
+		}
+	}
+	return true
 }
 
 func readableTaskSnapshot(snapshot *TaskSnapshot, running bool, now time.Time) *TaskSnapshot {

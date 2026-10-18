@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -79,6 +80,11 @@ type Helper struct {
 	taskCancel       context.CancelFunc
 	taskResults      chan taskCollectionResult
 	collectTasks     func(context.Context) TaskSnapshot
+	// A live Codex watch runs while the host is awake; its changes wake the loop.
+	codexWatch      atomic.Pointer[codexTaskWatch]
+	codexChanged    atomic.Bool
+	taskWake        chan struct{}
+	startCodexWatch func(context.Context, func()) *codexTaskWatch
 }
 
 func newHelper() (*Helper, error) {
@@ -91,8 +97,10 @@ func newHelper() (*Helper, error) {
 		due: map[string]time.Time{}, cooldown: map[string]time.Time{}, observedGeneration: map[string]uint64{},
 		providerErrors: map[string]string{}, pending: map[string]bool{}, results: make(chan providerResult, len(providers))}
 	h.write = h.writeSerial
-	h.collectTasks = collectTaskSnapshot
+	h.collectTasks = h.collectLiveTasks
+	h.startCodexWatch = startLiveCodexTasks
 	h.taskResults = make(chan taskCollectionResult, 1)
+	h.taskWake = make(chan struct{}, 1)
 	return h, nil
 }
 
@@ -547,6 +555,7 @@ func (h *Helper) run(ctx context.Context) {
 			return
 		case event := <-events:
 			h.handlePowerEvent(event)
+		case <-h.taskWake:
 		case <-ticker.C:
 		}
 	}

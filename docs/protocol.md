@@ -236,8 +236,8 @@ computer.
 `observed` is when the computer finished collecting, with the same bounds and
 30-second future limit as usage; it cannot be `null`. Records must carry the
 current `clock_epoch` and must not regress the provider's previous task
-observation. The sender should send a record for each provider after every
-collection, about every 30 seconds, and immediately on resync. The display shows
+observation. The sender should send a record for each provider whenever its counts
+change, at least every 15 seconds, and immediately on resync. The display shows
 counts only while their observation is under 45 seconds old by its synchronized
 clock, so counts from a stopped collector disappear rather than becoming zero.
 Host `asleep` and `disconnected` reports and a clock rebase clear all task counts.
