@@ -192,28 +192,16 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 				case validClaudeUUID(metadata.LastAssistantUUID) &&
 					metadata.PostTurnSummaryFor == metadata.LastAssistantUUID &&
 					(metadata.PostTurnSummary == nil || metadata.PostTurnSummary.SummarizesUUID == metadata.LastAssistantUUID):
-					category := ""
-					if metadata.PostTurnSummary != nil {
-						category = metadata.PostTurnSummary.StatusCategory
-					}
-					if wrap := metadata.TurnWrapUp; wrap != nil {
-						switch {
-						case !bool(wrap.Description):
-							candidate, category = "unknown", ""
-						case category == "failed":
-							// A wrap-up cannot clear a current failed summary.
-						case bool(wrap.NeedsUser):
-							category = "blocked"
-						case category == "blocked" || category == "need_input":
-							category = "review_ready"
-						}
-					}
-					switch category {
-					case "blocked", "need_input":
-						// A request for input means waiting, not failed.
-						candidate = "needs_attention"
-					case "failed":
+					wrap := metadata.TurnWrapUp
+					switch {
+					case wrap != nil && !bool(wrap.Description):
 						candidate = "unknown"
+					case metadata.PostTurnSummary != nil && metadata.PostTurnSummary.StatusCategory == "failed":
+						candidate = "unknown"
+					case wrap != nil && bool(wrap.NeedsUser):
+						// Only a wrap-up that asks you something shows as waiting in
+						// the app; the summary category alone is not shown.
+						candidate = "needs_attention"
 					}
 				}
 				if !matchedMetadata {

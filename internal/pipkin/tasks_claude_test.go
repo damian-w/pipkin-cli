@@ -81,12 +81,12 @@ func TestClaudeTaskStatesAndPrivateMetadata(t *testing.T) {
 		{"shell", func(f *claudeTaskFixture) { f.registry["status"] = "shell" }, "working", true},
 		{"native question", func(f *claudeTaskFixture) { f.registry["status"] = "waiting" }, "needs_attention", true},
 		{"idle", func(*claudeTaskFixture) {}, "idle", true},
-		{"blocked summary is attention", func(f *claudeTaskFixture) {
+		{"blocked summary alone is idle", func(f *claudeTaskFixture) {
 			f.metadata["postTurnSummary"].(map[string]any)["status_category"] = "blocked"
-		}, "needs_attention", false},
-		{"need input summary", func(f *claudeTaskFixture) {
+		}, "idle", true},
+		{"need input summary alone is idle", func(f *claudeTaskFixture) {
 			f.metadata["postTurnSummary"].(map[string]any)["status_category"] = "need_input"
-		}, "needs_attention", false},
+		}, "idle", true},
 		{"failed summary is not a validated blocker", func(f *claudeTaskFixture) {
 			f.metadata["postTurnSummary"].(map[string]any)["status_category"] = "failed"
 		}, "unknown", false},
@@ -261,13 +261,13 @@ func TestClaudeTaskMigratedMetadataCopiesMustAgree(t *testing.T) {
 	for _, c := range []struct {
 		first, second, want string
 	}{
-		{"completed", "blocked", "unknown"},
-		{"blocked", "completed", "unknown"},
-		{"error", "blocked", "unknown"},
+		{"completed", "needs user", "unknown"},
+		{"needs user", "completed", "unknown"},
+		{"error", "needs user", "unknown"},
 		{"archived", "completed", "unknown"},
 		{"completed", "archived", "unknown"},
 		{"archived", "archived", "excluded"},
-		{"blocked", "blocked", "needs_attention"},
+		{"needs user", "needs user", "needs_attention"},
 		{"completed", "completed", "idle"},
 	} {
 		t.Run(c.first+" and "+c.second, func(t *testing.T) {
@@ -279,6 +279,8 @@ func TestClaudeTaskMigratedMetadataCopiesMustAgree(t *testing.T) {
 					metadata["error"] = "private-error-canary"
 				case "archived":
 					metadata["isArchived"] = true
+				case "needs user":
+					metadata["turnWrapUp"] = map[string]any{"description": "private-description-canary", "needsUser": "private-action-canary"}
 				default:
 					metadata["postTurnSummary"].(map[string]any)["status_category"] = state
 				}
@@ -308,7 +310,7 @@ func TestClaudeTaskMigratedMetadataCopiesMustAgree(t *testing.T) {
 	}
 }
 
-func TestClaudeTaskCurrentWrapUpOverridesAndClearsSummaryAttention(t *testing.T) {
+func TestClaudeTaskCurrentWrapUpDecidesAttention(t *testing.T) {
 	for _, c := range []struct {
 		name, category, want string
 		change               func(map[string]any)
@@ -338,7 +340,7 @@ func TestClaudeTaskCurrentWrapUpOverridesAndClearsSummaryAttention(t *testing.T)
 			m["postTurnSummary"].(map[string]any)["summarizes_uuid"] = "44444444-4444-4444-8444-444444444444"
 			m["turnWrapUp"].(map[string]any)["needsUser"] = "private-action-canary"
 		}, true},
-		{"unsupported wrap cannot clear attention", "blocked", "unknown", func(m map[string]any) {
+		{"unsupported wrap stays unknown", "blocked", "unknown", func(m map[string]any) {
 			delete(m["turnWrapUp"].(map[string]any), "description")
 		}, false},
 		{"current error stays unknown", "completed", "unknown", func(m map[string]any) {
