@@ -7,14 +7,16 @@ import (
 	"time"
 )
 
-const identityLine = "v=1 kind=identity product=pipkin firmware=0.1.0 chip=esp32 board=sample hardware=unconfirmed protocol_min=1 protocol_max=1 seq=8 clock_epoch=0 unix=1800000000"
+const identityLine = "v=2 kind=identity product=pipkin firmware=2.0.0 board=esp32-2432s028r seq=8 clock_epoch=0 unix=1800000000"
 
 func TestIdentityRequiresValidBoundedRecord(t *testing.T) {
 	if !isIdentity(parseFields(identityLine)) {
-		t.Fatal("the firmware's v1 identity shape must be accepted")
+		t.Fatal("the firmware's identity shape must be accepted")
 	}
 	invalid := []string{
-		strings.Replace(identityLine, "v=1", "v=2", 1),
+		strings.Replace(identityLine, "v=2", "v=1", 1),
+		strings.Replace(identityLine, "v=2", "v=3", 1),
+		identityLine + " protocol_max=2",
 		identityLine + " seq=9",
 		identityLine + " stray",
 		identityLine + " unknown=value",
@@ -26,8 +28,6 @@ func TestIdentityRequiresValidBoundedRecord(t *testing.T) {
 		strings.Replace(identityLine, "seq=8", "seq=18446744073709551616", 1),
 		strings.Replace(identityLine, "clock_epoch=0", "clock_epoch=9", 1),
 		strings.Replace(identityLine, "clock_epoch=0 ", "", 1),
-		strings.Replace(identityLine, "protocol_min=1", "protocol_min=2", 1),
-		strings.Replace(identityLine, "protocol_max=1", "protocol_max=0", 1),
 		strings.Replace(identityLine, "unix=1800000000", "unix=1", 1),
 		strings.Replace(identityLine, "unix=1800000000", "unix=", 1),
 		identityLine + strings.Repeat(" x=y", 33),

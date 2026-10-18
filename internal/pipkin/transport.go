@@ -3,6 +3,7 @@ package pipkin
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,11 @@ type connection struct {
 
 const maxPacketBytes = 768
 
-const identifyPacket = "v=1 kind=identify\n"
+// protocolVersion is the major version shared by the CLI and firmware. Every
+// record carries it, and a display running another major version is not used.
+const protocolVersion = 2
+
+var identifyPacket = fmt.Sprintf("v=%d kind=identify\n", protocolVersion)
 
 func (c *connection) lines() ([]string, error) {
 	data, err := c.port.ReadAvailable()
@@ -95,7 +100,7 @@ func parseFields(line string) map[string]string {
 }
 
 func isIdentity(fields map[string]string) bool {
-	if fields["v"] != "1" || fields["kind"] != "identity" || fields["product"] != "pipkin" {
+	if fields["v"] != strconv.Itoa(protocolVersion) || fields["kind"] != "identity" || fields["product"] != "pipkin" {
 		return false
 	}
 	seq, ok := decimalUint(fields["seq"])
@@ -112,24 +117,9 @@ func isIdentity(fields map[string]string) bool {
 			return false
 		}
 	}
-	minimum, maximum := uint64(1), uint64(1)
-	if value, exists := fields["protocol_min"]; exists {
-		var ok bool
-		minimum, ok = decimalUint(value)
-		if !ok || minimum != 1 {
-			return false
-		}
-	}
-	if value, exists := fields["protocol_max"]; exists {
-		var ok bool
-		maximum, ok = decimalUint(value)
-		if !ok || maximum < minimum {
-			return false
-		}
-	}
 	for key := range fields {
 		switch key {
-		case "v", "kind", "product", "firmware", "chip", "board", "hardware", "protocol_min", "protocol_max", "seq", "clock_epoch", "unix":
+		case "v", "kind", "product", "firmware", "board", "seq", "clock_epoch", "unix":
 		default:
 			return false
 		}

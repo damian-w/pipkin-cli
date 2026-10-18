@@ -17,10 +17,8 @@ import (
 
 func testFirmwareRelease(t *testing.T, firmwareVersion string) *firmwareRelease {
 	t.Helper()
-	m := firmwareManifest{SchemaVersion: 1, Product: "pipkin", Version: firmwareVersion,
-		SourceRevision: strings.Repeat("a", 40), Board: "esp32-2432s028r-provisional", Hardware: "unconfirmed",
-		Chip: "esp32", FlashSize: 4 << 20, FlashMode: "dio", FlashFreq: "40m", ProtocolMin: 1, ProtocolMax: 1,
-		MinimumCLI: "1.1.0", Layout: "esp32-single-app-v1"}
+	m := firmwareManifest{Product: "pipkin", Version: firmwareVersion,
+		SourceRevision: strings.Repeat("a", 40), Board: firmwareBoard}
 	folder := t.TempDir()
 	for _, image := range []firmwareImage{
 		{Role: "bootloader", File: "bootloader.bin", Offset: 0x1000, Size: 32},
@@ -39,9 +37,8 @@ func testFirmwareRelease(t *testing.T, firmwareVersion string) *firmwareRelease 
 }
 
 func testFlashIdentity(firmwareVersion string) map[string]string {
-	return map[string]string{"v": "1", "kind": "identity", "product": "pipkin", "firmware": firmwareVersion,
-		"chip": "esp32", "board": "esp32-2432s028r-provisional", "hardware": "unconfirmed",
-		"protocol_min": "1", "protocol_max": "1", "seq": "0", "clock_epoch": "0", "unix": "null"}
+	return map[string]string{"v": "2", "kind": "identity", "product": "pipkin", "firmware": firmwareVersion,
+		"board": firmwareBoard, "seq": "0", "clock_epoch": "0", "unix": "null"}
 }
 
 type fakeFirmwareFlasher struct {
@@ -122,10 +119,7 @@ type flashFixture struct {
 func newFlashFixture(t *testing.T) *flashFixture {
 	t.Helper()
 	t.Setenv("PIPKIN_HOME", filepath.Join(t.TempDir(), "pipkin"))
-	oldVersion := version
-	version = "1.1.0"
-	t.Cleanup(func() { version = oldVersion })
-	f := &flashFixture{release: testFirmwareRelease(t, "1.0.1"), running: true, final: testFlashIdentity("1.0.1")}
+	f := &flashFixture{release: testFirmwareRelease(t, "2.0.1"), running: true, final: testFlashIdentity("2.0.1")}
 	_, table := f.release.image("partition-table")
 	data, err := os.ReadFile(table)
 	if err != nil {
@@ -170,7 +164,7 @@ func TestFlashFirstInstallAndUpdate(t *testing.T) {
 		t.Run(map[bool]string{false: "first-install", true: "update"}[update], func(t *testing.T) {
 			f := newFlashFixture(t)
 			if update {
-				f.initial = testFlashIdentity("1.0.0")
+				f.initial = testFlashIdentity("2.0.0")
 			}
 			if err := f.run(context.Background(), flashOptions{}, "yes\n"); err != nil {
 				t.Fatal(err)
@@ -185,10 +179,10 @@ func TestFlashFirstInstallAndUpdate(t *testing.T) {
 			if update && f.tool.writes[0][0].Offset != 0x10000 {
 				t.Fatal("update touched bootloader, partitions or settings")
 			}
-			if strings.Contains(f.output.String(), "Confirm this is a CYD") == update || !strings.Contains(f.output.String(), "1.0.1 is running") {
+			if strings.Contains(f.output.String(), "Confirm this is a CYD") == update || !strings.Contains(f.output.String(), "2.0.1 is running") {
 				t.Fatal(f.output.String())
 			}
-			if update && (!strings.Contains(f.output.String(), "Ready to update your display from Pipkin 1.0.0 to 1.0.1.") || !strings.Contains(f.output.String(), "Update now?")) {
+			if update && (!strings.Contains(f.output.String(), "Ready to update your display from Pipkin 2.0.0 to 2.0.1.") || !strings.Contains(f.output.String(), "Update now?")) {
 				t.Fatal(f.output.String())
 			}
 			if strings.Contains(f.output.String(), "Finishing the firmware write") {
@@ -224,10 +218,10 @@ func TestFlashRejectsIncompatibleAndChangedDevices(t *testing.T) {
 			case "secure":
 				f.tool.probe.Secure = true
 			case "identity":
-				f.initial = testFlashIdentity("1.0.0")
-				delete(f.initial, "board")
+				f.initial = testFlashIdentity("2.0.0")
+				f.initial["board"] = "esp32-s3"
 			case "layout":
-				f.initial = testFlashIdentity("1.0.0")
+				f.initial = testFlashIdentity("2.0.0")
 				f.tool.table = []byte("different partition layout")
 			case "changed-board":
 				f.tool.secondMAC = "11:22:33:44:55:66"
@@ -250,16 +244,16 @@ func TestFlashUpToDateReinstallAndDowngrade(t *testing.T) {
 	for _, scenario := range []string{"up-to-date", "reinstall", "newer", "explicit-downgrade"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newFlashFixture(t)
-			f.initial = testFlashIdentity("1.0.1")
+			f.initial = testFlashIdentity("2.0.1")
 			options := flashOptions{}
 			if scenario == "reinstall" {
 				options.Reinstall = true
 			}
 			if scenario == "newer" || scenario == "explicit-downgrade" {
-				f.initial["firmware"] = "2.0.0"
+				f.initial["firmware"] = "2.1.0"
 			}
 			if scenario == "explicit-downgrade" {
-				options.Version = "1.0.1"
+				options.Version = "2.0.1"
 			}
 			err := f.run(context.Background(), options, "y\n")
 			if (scenario == "newer") != (err != nil) {
@@ -277,36 +271,43 @@ func TestFlashUpToDateReinstallAndDowngrade(t *testing.T) {
 }
 
 func TestFlashStoredPipkinFirmwarePreservesSettings(t *testing.T) {
-	for _, scenario := range []string{"recover-update", "recover-reinstall", "recover-reinstall-v-prefix", "same-needs-reinstall", "same-v-prefix-needs-reinstall", "unsupported-layout", "newer-stored"} {
+	for _, scenario := range []string{"recover-update", "older-major", "recover-reinstall", "recover-reinstall-v-prefix", "same-needs-reinstall", "same-v-prefix-needs-reinstall", "unsupported-layout", "newer-stored"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newFlashFixture(t)
-			storedVersion := "1.0.0"
+			storedVersion := "2.0.0"
 			options := flashOptions{}
+			if scenario == "older-major" {
+				storedVersion = "1.4.0"
+			}
 			if scenario == "recover-reinstall" || scenario == "same-needs-reinstall" {
-				storedVersion = "1.0.1"
+				storedVersion = "2.0.1"
 				options.Reinstall = scenario == "recover-reinstall"
 			}
 			if scenario == "recover-reinstall-v-prefix" || scenario == "same-v-prefix-needs-reinstall" {
-				storedVersion = "v1.0.1"
+				storedVersion = "v2.0.1"
 				options.Reinstall = scenario == "recover-reinstall-v-prefix"
 			}
 			if scenario == "unsupported-layout" {
 				f.tool.table = []byte("different layout")
 			}
 			if scenario == "newer-stored" {
-				storedVersion = "2.0.0"
+				storedVersion = "2.1.0"
 			}
 			f.tool.prefix = buildTestESPImage(storedVersion, strings.Repeat("a", 40))
 			err := f.run(context.Background(), options, "yes\n")
-			wantWrite := scenario == "recover-update" || scenario == "recover-reinstall" || scenario == "recover-reinstall-v-prefix"
+			wantWrite := scenario == "recover-update" || scenario == "older-major" || scenario == "recover-reinstall" || scenario == "recover-reinstall-v-prefix"
 			if wantWrite != (err == nil) || f.tool.erases != 0 || f.starts != 1 {
 				t.Fatalf("stored firmware recovery: err=%v erases=%d starts=%d", err, f.tool.erases, f.starts)
 			}
 			if wantWrite {
-				if len(f.tool.writes) != 1 || len(f.tool.writes[0]) != 1 || f.tool.writes[0][0].Offset != 0x10000 || !strings.Contains(f.output.String(), "installed but not responding") {
-					t.Fatal("nonresponding kit was treated as a new board", f.output.String())
+				state := "installed but not responding"
+				if scenario == "older-major" {
+					state = "too old for this version of Pipkin"
 				}
-				if options.Reinstall && !strings.Contains(f.output.String(), "reinstall Pipkin 1.0.1") {
+				if len(f.tool.writes) != 1 || len(f.tool.writes[0]) != 1 || f.tool.writes[0][0].Offset != 0x10000 || !strings.Contains(f.output.String(), state) {
+					t.Fatal("stored firmware was treated as a new board", f.output.String())
+				}
+				if options.Reinstall && !strings.Contains(f.output.String(), "reinstall Pipkin 2.0.1") {
 					t.Fatal("stored firmware reinstall was labelled as an update", f.output.String())
 				}
 			} else if len(f.tool.writes) != 0 {
@@ -348,7 +349,7 @@ func TestFlashFailureRestoresHelperAndReportsRecovery(t *testing.T) {
 			case "write":
 				f.tool.writeErr = boom
 			case "wrong-version":
-				f.final["firmware"] = "1.0.0"
+				f.final["firmware"] = "2.0.0"
 			case "no-boot":
 				f.final = nil
 			case "restore":
@@ -428,7 +429,7 @@ func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
 		t.Fatal(port, err)
 	}
 	var argsSeen []string
-	code, err := dispatch([]string{"flash", "--port", "COM4"}, "1.1.0", testCommands(t, io.Discard,
+	code, err := dispatch([]string{"flash", "--port", "COM4"}, "2.0.0", testCommands(t, io.Discard,
 		map[string]func([]string) error{"flash": func(args []string) error { argsSeen = args; return nil }}), io.Discard)
 	if code != 0 || err != nil || len(argsSeen) != 2 {
 		t.Fatal("flash route failed", code, err, argsSeen)
@@ -436,23 +437,19 @@ func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
 	for _, args := range [][]string{{"flash", "--help"}, {"help", "flash"}} {
 		calls := 0
 		var output bytes.Buffer
-		if code, err := dispatch(args, "1.1.0", recordingCommands(&output, &calls), &output); code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "--reinstall") {
+		if code, err := dispatch(args, "2.0.0", recordingCommands(&output, &calls), &output); code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "--reinstall") {
 			t.Fatal("flash help has side effects", code, err)
 		}
 	}
 }
 
 func TestFirmwareManifestRejectsUnsafeContracts(t *testing.T) {
-	base := testFirmwareRelease(t, "1.0.0").Manifest
+	base := testFirmwareRelease(t, "2.0.0").Manifest
 	for _, change := range []func(*firmwareManifest){
-		func(m *firmwareManifest) { m.SchemaVersion = 2 },
-		func(m *firmwareManifest) { m.Version = "1.0.1" },
+		func(m *firmwareManifest) { m.Product = "other" },
+		func(m *firmwareManifest) { m.Version = "2.0.1" },
 		func(m *firmwareManifest) { m.SourceRevision = "unknown" },
-		func(m *firmwareManifest) { m.MinimumCLI = "2.0.0" },
-		func(m *firmwareManifest) { m.MinimumCLI = strings.Repeat("9", 32) + ".0.0" },
 		func(m *firmwareManifest) { m.Board = "esp32-s3" },
-		func(m *firmwareManifest) { m.ProtocolMin = 2 },
-		func(m *firmwareManifest) { m.FlashMode = "qio" },
 		func(m *firmwareManifest) { m.Images[0].Offset = 0x9000 },
 		func(m *firmwareManifest) { m.Images[0].File = "../bootloader.bin" },
 		func(m *firmwareManifest) { m.Images[0].Size = 1 << 20 },
@@ -464,11 +461,19 @@ func TestFirmwareManifestRejectsUnsafeContracts(t *testing.T) {
 		var manifest firmwareManifest
 		json.Unmarshal(data, &manifest)
 		change(&manifest)
-		if err := validateFirmwareManifest(manifest, "v1.0.0", "1.1.0"); err == nil {
+		if err := validateFirmwareManifest(manifest, "v2.0.0"); err == nil {
 			t.Fatalf("unsafe contract accepted: %+v", manifest)
 		}
 	}
-	if err := validateFirmwareManifest(base, "v1.0.0", "1.1.0"); err != nil {
+	if err := validateFirmwareManifest(base, "v2.0.0"); err != nil {
 		t.Fatal(err)
+	}
+	// Firmware must share the CLI's major version, which is the protocol version.
+	for version, want := range map[string]string{"1.4.0": "too old", "3.0.0": "pipkin update"} {
+		other := base
+		other.Version = version
+		if err := validateFirmwareManifest(other, "v"+version); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("firmware %s: %v", version, err)
+		}
 	}
 }

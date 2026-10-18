@@ -153,7 +153,7 @@ func writeDisplayHint(out io.Writer, reason, goos string) error {
 			lines.line("  ", hint)
 		}
 	default:
-		lines.line("  ", "Plug in the display with a USB data cable. For a new self-built display, run 'pipkin flash'.")
+		lines.line("  ", "Plug in the display with a USB data cable. If it's plugged in, run 'pipkin flash' to install or update its firmware.")
 	}
 	return lines.err
 }

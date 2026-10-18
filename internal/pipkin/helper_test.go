@@ -53,7 +53,7 @@ func (p *fakePort) ReadAvailable() ([]byte, error) {
 func (p *fakePort) Close() error { p.closed = true; return nil }
 
 func TestConnectionSplitsLines(t *testing.T) {
-	port := &fakePort{incoming: []byte("boot noise\r\nv=1 kind=identity product=pipkin seq=7 clock_epoch=0 unix=null\nhalf")}
+	port := &fakePort{incoming: []byte("boot noise\r\nv=2 kind=identity product=pipkin seq=7 clock_epoch=0 unix=null\nhalf")}
 	conn := &connection{port: port}
 	lines, _ := conn.lines()
 	if len(lines) != 2 || !isIdentity(parseFields(lines[1])) || parseFields(lines[1])["unix"] != "null" {
@@ -90,20 +90,20 @@ func TestFlushSendsOnlyChanges(t *testing.T) {
 func TestUnrequestedIdentityIsIgnored(t *testing.T) {
 	h, lines := testHelper()
 	h.sequence = 5
-	port := &fakePort{incoming: []byte("v=1 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")}
+	port := &fakePort{incoming: []byte("v=2 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")}
 	h.conn = &connection{port: port, name: "COM9"}
 	h.handleInput()
 	if len(*lines) != 0 {
 		t.Fatalf("a duplicate identity reply must not trigger a resync: %q", *lines)
 	}
 	h.identifyPending, h.identifySequence = true, 3
-	port.incoming = []byte("v=1 kind=identity product=pipkin seq=3 clock_epoch=0 unix=1800000000\n")
+	port.incoming = []byte("v=2 kind=identity product=pipkin seq=3 clock_epoch=0 unix=1800000000\n")
 	h.handleInput()
 	if len(*lines) != 0 {
 		t.Fatalf("packets sent after the request must not look like a restart: %q", *lines)
 	}
 	h.identifyPending = true
-	port.incoming = []byte("v=1 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")
+	port.incoming = []byte("v=2 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")
 	h.handleInput()
 	if len(*lines) == 0 || !strings.Contains((*lines)[0], "kind=clock") {
 		t.Fatalf("a requested reply showing a restart must resync: %q", *lines)
@@ -137,7 +137,7 @@ func TestProtocolFixture(t *testing.T) {
 			{ID: "c", Status: "needs_attention"}, {ID: "d", Status: "idle"}, {ID: "e", Status: "unknown"}}},
 		"claude": {Coverage: "unavailable"}}}
 	h.tasksCurrent = true
-	h.resync(map[string]string{"seq": "0", "clock_epoch": "0", "unix": "null", "protocol_max": "2"})
+	h.resync(map[string]string{"seq": "0", "clock_epoch": "0", "unix": "null"})
 	h.syncClock("1799990000")
 	h.flush()
 	// Only fresh observations may enter the new clock epoch.
@@ -179,21 +179,14 @@ func TestProtocolFixture(t *testing.T) {
 	}
 }
 
-func TestTaskRecordsNeedProtocolTwo(t *testing.T) {
+func TestTaskRecordsAreSentOnChange(t *testing.T) {
 	h, lines := testHelper()
 	h.tasks = &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{
 		"codex": {Coverage: "partial", Tasks: []Task{{ID: "a", Status: "working"}, {ID: "b", Status: "needs_attention"},
 			{ID: "c", Status: "idle"}, {ID: "d", Status: "unknown"}}},
 		"claude": {Coverage: "unsupported"}}}
 	h.tasksCurrent = true
-	identity := map[string]string{"seq": "0", "clock_epoch": "0", "unix": "1800000000", "protocol_max": "1"}
-	h.resync(identity)
-	if strings.Contains(strings.Join(*lines, ""), "kind=tasks") {
-		t.Fatalf("protocol 1 displays must not receive task records: %q", *lines)
-	}
-	*lines = nil
-	identity["seq"], identity["protocol_max"] = strconv.FormatUint(h.sequence, 10), "2"
-	h.resync(identity)
+	h.resync(map[string]string{"seq": "0", "clock_epoch": "0", "unix": "1800000000"})
 	got := strings.Join(*lines, "")
 	for _, want := range []string{
 		" kind=tasks provider=codex coverage=partial observed=1800000000 working=1 attention=1 blocked=0\n",
@@ -204,8 +197,8 @@ func TestTaskRecordsNeedProtocolTwo(t *testing.T) {
 		}
 	}
 	for _, line := range *lines {
-		if strings.Contains(line, "kind=tasks") != strings.HasPrefix(line, "v=2 ") {
-			t.Fatalf("only task records use protocol 2: %q", line)
+		if !strings.HasPrefix(line, "v=2 ") {
+			t.Fatalf("every record must carry protocol 2: %q", line)
 		}
 	}
 	*lines = nil
@@ -225,10 +218,6 @@ func TestTaskRecordsNeedProtocolTwo(t *testing.T) {
 	h.flush()
 	if len(*lines) != 0 {
 		t.Fatalf("invalidated tasks must wait for a fresh collection: %q", *lines)
-	}
-	h.disconnect("test")
-	if h.taskRecords {
-		t.Fatal("a reconnected display must report its protocol again")
 	}
 }
 
@@ -324,7 +313,7 @@ func TestOffsetChangeAndShortClockRollback(t *testing.T) {
 	h, lines := testHelper()
 	h.syncClock("1800000000")
 	h.now = func() time.Time { return time.Unix(testNow, 0).In(time.FixedZone("", 480*60)) }
-	h.conn = &connection{port: &fakePort{incoming: []byte("v=1 kind=identity product=pipkin seq=1 clock_epoch=0 unix=1800000000\n")}, name: "COM9"}
+	h.conn = &connection{port: &fakePort{incoming: []byte("v=2 kind=identity product=pipkin seq=1 clock_epoch=0 unix=1800000000\n")}, name: "COM9"}
 	h.identifyPending, h.identifySequence = true, 1
 	h.handleInput()
 	if got := (*lines)[len(*lines)-1]; !strings.Contains(got, "tz=480") || strings.Contains(got, "rebase=1") || h.generation != 0 {

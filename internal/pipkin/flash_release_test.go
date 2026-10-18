@@ -24,7 +24,7 @@ type firmwareHTTPFixture struct {
 
 func newFirmwareHTTPFixture(t *testing.T) *firmwareHTTPFixture {
 	t.Helper()
-	r := testFirmwareRelease(t, "1.0.0")
+	r := testFirmwareRelease(t, "2.0.0")
 	f := &firmwareHTTPFixture{files: map[string][]byte{}}
 	for i := range r.Manifest.Images {
 		image := &r.Manifest.Images[i]
@@ -41,12 +41,12 @@ func newFirmwareHTTPFixture(t *testing.T) *firmwareHTTPFixture {
 	f.refreshChecksums()
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		f.requests = append(f.requests, request.URL.Path)
-		if request.URL.Path == "/releases/latest" || request.URL.Path == "/releases/tags/v1.0.0" {
+		if request.URL.Path == "/releases/latest" || request.URL.Path == "/releases/tags/v2.0.0" {
 			json.NewEncoder(w).Encode(f.metadata)
 			return
 		}
-		if strings.HasPrefix(request.URL.Path, "/download/v1.0.0/") {
-			name := strings.TrimPrefix(request.URL.Path, "/download/v1.0.0/")
+		if strings.HasPrefix(request.URL.Path, "/download/v2.0.0/") {
+			name := strings.TrimPrefix(request.URL.Path, "/download/v2.0.0/")
 			if data, ok := f.files[name]; ok {
 				w.Write(data)
 				return
@@ -57,9 +57,9 @@ func newFirmwareHTTPFixture(t *testing.T) *firmwareHTTPFixture {
 	t.Cleanup(f.server.Close)
 	var assets []map[string]string
 	for name := range f.files {
-		assets = append(assets, map[string]string{"name": name, "browser_download_url": f.server.URL + "/download/v1.0.0/" + name})
+		assets = append(assets, map[string]string{"name": name, "browser_download_url": f.server.URL + "/download/v2.0.0/" + name})
 	}
-	f.metadata = map[string]any{"tag_name": "v1.0.0", "draft": false, "prerelease": false, "assets": assets}
+	f.metadata = map[string]any{"tag_name": "v2.0.0", "draft": false, "prerelease": false, "assets": assets}
 	f.source = firmwareSource{api: f.server.URL, downloads: f.server.URL + "/download", client: f.server.Client()}
 	return f
 }
@@ -86,12 +86,12 @@ func (f *firmwareHTTPFixture) alterManifest(change func(map[string]any)) {
 
 func TestFirmwareReleaseStagesOneFrozenStableVersion(t *testing.T) {
 	f := newFirmwareHTTPFixture(t)
-	r, err := f.source.stage(context.Background(), "", "1.1.0", t.TempDir())
+	r, err := f.source.stage(context.Background(), "", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.close()
-	if r.Tag != "v1.0.0" || len(r.Manifest.Images) != 3 {
+	if r.Tag != "v2.0.0" || len(r.Manifest.Images) != 3 {
 		t.Fatal("incorrect release", r)
 	}
 	for name, data := range f.files {
@@ -106,7 +106,7 @@ func TestFirmwareReleaseStagesOneFrozenStableVersion(t *testing.T) {
 	for _, request := range f.requests {
 		if request == "/releases/latest" {
 			latest++
-		} else if !strings.HasPrefix(request, "/download/v1.0.0/") {
+		} else if !strings.HasPrefix(request, "/download/v2.0.0/") {
 			t.Fatal("download escaped frozen version", request)
 		}
 	}
@@ -116,7 +116,7 @@ func TestFirmwareReleaseStagesOneFrozenStableVersion(t *testing.T) {
 }
 
 func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
-	for _, scenario := range []string{"draft", "prerelease", "branch", "missing-asset", "wrong-repository", "duplicate-assets", "bad-sums", "changed-manifest", "trailing-manifest", "unknown-schema-field", "newer-cli", "changed-image", "truncated-image", "unsafe-file", "wrong-app", "wrong-partitions"} {
+	for _, scenario := range []string{"draft", "prerelease", "branch", "missing-asset", "wrong-repository", "duplicate-assets", "bad-sums", "changed-manifest", "trailing-manifest", "unknown-schema-field", "other-board", "changed-image", "truncated-image", "unsafe-file", "wrong-app", "wrong-partitions"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newFirmwareHTTPFixture(t)
 			switch scenario {
@@ -145,8 +145,8 @@ func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
 				f.refreshChecksums()
 			case "unknown-schema-field":
 				f.alterManifest(func(m map[string]any) { m["erase_all"] = true })
-			case "newer-cli":
-				f.alterManifest(func(m map[string]any) { m["minimum_cli"] = "2.0.0" })
+			case "other-board":
+				f.alterManifest(func(m map[string]any) { m["board"] = "esp32-s3" })
 			case "changed-image":
 				f.files["pipkin.bin"][100] ^= 1
 			case "truncated-image":
@@ -173,7 +173,7 @@ func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
 				})
 			}
 			parent := t.TempDir()
-			if release, err := f.source.stage(context.Background(), "", "1.1.0", parent); err == nil {
+			if release, err := f.source.stage(context.Background(), "", parent); err == nil {
 				release.close()
 				t.Fatal("unsafe firmware release was accepted")
 			}
@@ -187,21 +187,21 @@ func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
 
 func TestFirmwareReleaseExplicitStableVersionAndCancellation(t *testing.T) {
 	f := newFirmwareHTTPFixture(t)
-	r, err := f.source.stage(context.Background(), "v1.0.0", "1.1.0", t.TempDir())
+	r, err := f.source.stage(context.Background(), "v2.0.0", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.close()
-	if f.requests[0] != "/releases/tags/v1.0.0" {
+	if f.requests[0] != "/releases/tags/v2.0.0" {
 		t.Fatal("explicit version used latest endpoint", f.requests)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := f.source.stage(ctx, "", "1.1.0", t.TempDir()); err == nil {
+	if _, err := f.source.stage(ctx, "", t.TempDir()); err == nil {
 		t.Fatal("cancelled firmware request succeeded")
 	}
 	for _, invalid := range []string{"../main", "main", "v1.0.0-beta", "v1.00.0"} {
-		if _, err := f.source.stage(context.Background(), invalid, "1.1.0", t.TempDir()); err == nil {
+		if _, err := f.source.stage(context.Background(), invalid, t.TempDir()); err == nil {
 			t.Fatal("invalid release version accepted", invalid)
 		}
 	}

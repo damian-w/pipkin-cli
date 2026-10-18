@@ -29,8 +29,7 @@ On a Mac, installing Pipkin may ask for permission to read the
 `Claude Safe Storage` Keychain item, which unlocks Claude's saved data. Enter your
 Mac login password and choose **Always Allow** so Pipkin can read it in the
 background. If you blocked it or cancelled, run `pipkin authorize`. Updates check
-this permission again before restarting Pipkin; updates started from a version
-before 1.2.0 may also need `pipkin restart`. Background reads never open
+this permission again before restarting Pipkin. Background reads never open
 permission prompts. On Linux, Pipkin can read the credential store only when it's
 already unlocked. Windows uses your user account's credential storage.
 
@@ -115,7 +114,7 @@ provider states, freshness and errors.
 
 Current USB firmware receives session, weekly, reset-time, and banked-reset
 information. Additional metrics are available in JSON and require a compatible
-firmware update to appear on the physical display. See the [display protocol](protocol.md).
+firmware update to appear on the physical display. See the [display protocol](https://github.com/damian-w/pipkin/blob/main/docs/protocol.md).
 
 ## Compatibility
 

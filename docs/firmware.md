@@ -2,9 +2,12 @@
 
 `pipkin flash` installs the latest stable firmware from
 [damian-w/pipkin](https://github.com/damian-w/pipkin/releases). Self-built boards and
-Pipkin kits use the same command. The latest firmware requires CLI **1.4.0 or
-later**; `pipkin update` updates the CLI, while `pipkin flash` updates the display.
-Earlier firmware releases supported CLI 1.1.0 or later.
+Pipkin kits use the same command. `pipkin update` updates the CLI, while
+`pipkin flash` updates the display.
+
+The CLI and firmware share a major version, which is the protocol they speak:
+Pipkin 2.x installs and talks to display firmware 2.x. If the latest firmware has
+a newer major version, `pipkin flash` asks you to run `pipkin update` first.
 
 ## Supported board
 
@@ -19,8 +22,9 @@ not the seller's product name. Compare yours with the
 Pipkin can check the ESP32 chip and its flash, but not which screen is attached,
 so make sure it's a CYD 2.8-inch touch board before flashing. If the display's
 firmware doesn't respond, Pipkin looks for a Pipkin version stored on the board
-and shows it as "installed but not responding". Otherwise the board is shown as
-not identified as Pipkin.
+and shows it as "installed but not responding", or "too old for this version of
+Pipkin" for firmware from before 2.0. Either way it's offered as an update that
+keeps your settings. Otherwise the board is treated as a new install.
 
 ## Flash a release
 
@@ -30,9 +34,8 @@ Use a USB data cable, connect one supported board, and open a terminal:
 pipkin flash
 ```
 
-Pipkin installs only published stable firmware releases. New releases stay
-drafts until they've been tested on hardware, and older releases without a
-firmware manifest (`firmware.json`) can't be installed this way.
+Pipkin installs only published stable firmware releases with its own major
+version. New releases stay drafts until they've been tested on hardware.
 
 The CLI obtains the stable release's flash manifest, downloads the required images
 and verifies their checksums. It checks the serial connection, current firmware
@@ -67,7 +70,7 @@ To choose a specific stable firmware release:
 pipkin flash --version VERSION
 ```
 
-Replace `VERSION` with an existing firmware release version, not the CLI version.
+Replace `VERSION` with an existing 2.x firmware release version.
 The plan still shows any downgrade and asks for confirmation. Drafts and
 prereleases are not used.
 If the same firmware version is already running, a normal flash does not rewrite
@@ -112,9 +115,8 @@ command before writing; reinstalling does not bypass those checks.
 
 Pipkin downloads Espressif's official **esptool v5.4.0**, checks the download and
 keeps a private copy, so you don't need to install Python or ESP-IDF. The tool
-runs only when you use `pipkin flash` or `pipkin identify`, never in the
-background. GitHub requests carry no usage readings or sign-ins, and Pipkin has no
-telemetry.
+runs only when you use `pipkin flash`, never in the background. GitHub requests
+carry no usage readings or sign-ins, and Pipkin has no telemetry.
 
 See [flashing-tool provenance and licences](esptool.md) for the pinned downloads,
 cache checks and the tool's third-party notices.

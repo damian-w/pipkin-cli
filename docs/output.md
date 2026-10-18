@@ -130,17 +130,16 @@ threads are excluded, and a dismissed question card can still show as
 While the computer is awake, the helper reads Claude tasks every 2 seconds and
 keeps a live connection to the Codex app, so changes show within a couple of
 seconds. It saves them as `tasks` in the status snapshot when a status changes
-and at least every 15 seconds. It is omitted before the first check and by
-older helpers. Sleep and wake discard earlier results. `status --json` reports
+and at least every 15 seconds. It is omitted before the first check. Sleep and
+wake discard earlier results. `status --json` reports
 every provider as `unavailable` with `tasks: null` when the helper is stopped or
 the check is 45 seconds old or more, or in the future, keeping the original
 `observed_at`. The display uses the same 45-second limit.
 
-`pipkin tasks` never updates the cache or the display. The helper sends a
-display that reports protocol 2 only each provider's coverage and its working,
-needs-attention and blocked counts, when they change and at least every 15
-seconds. See the
-[display protocol](protocol.md#local-tasks).
+`pipkin tasks` never updates the cache or the display. The helper sends the
+display only each provider's coverage and its working, needs-attention and
+blocked counts, when they change and at least every 15 seconds. See the
+[display protocol](https://github.com/damian-w/pipkin/blob/main/docs/protocol.md#local-tasks).
 
 ```json
 {
@@ -175,8 +174,8 @@ seconds. See the
 | `banked` | Nonnegative integer; omitted when unknown | Available reset grants; zero is a known balance. |
 
 Optional objects are omitted when unavailable; readers should also tolerate null.
-Missing or null readings may occur in external or older snapshots. No missing
-metric should be converted to zero.
+Missing or null readings can occur. No missing metric should be converted to
+zero.
 
 ### Source and account
 
@@ -260,7 +259,7 @@ Fresh usage with known optional metrics and a missing Claude weekly reset:
 ```json
 {
   "schema_version": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "pid": 0,
   "device": null,
   "states": {"codex": "available", "claude": "available"},
@@ -300,9 +299,9 @@ time remains unchanged; Claude's old quota is cleared. If the helper stops,
 ```json
 {
   "schema_version": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "pid": 4321,
-  "device": {"port": "COM9", "firmware": "1.0.0"},
+  "device": {"port": "COM9", "firmware": "2.0.0"},
   "states": {"codex": "unavailable", "claude": "signed_out"},
   "readings": {
     "codex": {
@@ -339,7 +338,7 @@ For expired sign-ins, direct users to the provider app; on macOS, blocked
 Keychain permission can be resolved explicitly with `pipkin authorize`.
 
 JSON is not a USB packet. The helper sends session/weekly windows, account,
-observation time and banked resets using the [v1 display protocol](protocol.md).
+observation time and banked resets using the [display protocol](https://github.com/damian-w/pipkin/blob/main/docs/protocol.md).
 Plan, source, models, credits, extra usage and JSON errors stay on the computer.
 Unknown serial keys are rejected by the firmware, so adding display metrics
 requires a coordinated protocol/firmware update. See the

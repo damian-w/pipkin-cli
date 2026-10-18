@@ -75,7 +75,6 @@ type Helper struct {
 	handlingPower    bool
 	tasks            *TaskSnapshot
 	tasksCurrent     bool // collected in this generation, so tasks may be sent
-	taskRecords      bool // the display accepts protocol 2 task records
 	taskPending      bool
 	taskCancel       context.CancelFunc
 	taskResults      chan taskCollectionResult
@@ -130,15 +129,10 @@ func (h *Helper) send(fields string) bool {
 	if h.power.suspended() && !strings.HasPrefix(fields, "kind=host ") {
 		return false
 	}
-	// Each record carries the protocol version that introduced its kind.
-	protocol := 1
-	if tasks {
-		protocol = 2
-	}
 	h.sequence++
 	ctx, cancel := context.WithTimeout(h.context(), powerWriteTimeout)
 	defer cancel()
-	if err := h.write(ctx, fmt.Sprintf("v=%d seq=%d %s\n", protocol, h.sequence, fields)); err != nil {
+	if err := h.write(ctx, fmt.Sprintf("v=%d seq=%d %s\n", protocolVersion, h.sequence, fields)); err != nil {
 		h.disconnect("write failed: " + err.Error())
 		return false
 	}
@@ -155,7 +149,6 @@ func (h *Helper) disconnect(reason string) {
 	h.sent = map[string]string{}
 	h.identifyPending = false
 	h.clockSynced = false
-	h.taskRecords = false
 }
 
 func (h *Helper) connect(ctx context.Context) {
@@ -216,7 +209,6 @@ func (h *Helper) connectPorts(ctx context.Context, ports []string, open func(str
 }
 
 func (h *Helper) resync(identity map[string]string) {
-	h.taskRecords = acceptsTasks(identity)
 	seq, epoch := identityClock(identity)
 	if seq < h.sequence && epoch == h.clockEpoch {
 		h.invalidateObservations()
@@ -316,7 +308,7 @@ func (h *Helper) flush() {
 			h.sent[provider] = fields
 		}
 	}
-	if !h.taskRecords || !h.tasksCurrent || h.tasks == nil {
+	if !h.tasksCurrent || h.tasks == nil {
 		return
 	}
 	for _, provider := range providers {

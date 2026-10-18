@@ -34,7 +34,7 @@ func recordingCommands(output io.Writer, calls *int) []cliCommand {
 }
 
 func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
+	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
 		for _, option := range []string{"--dry-run", "--json --extra"} {
 			calls := 0
 			code, err := dispatch([]string{command, option}, "test", recordingCommands(io.Discard, &calls), io.Discard)
@@ -46,7 +46,7 @@ func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
 }
 
 func TestCLIHelpHasNoCommandSideEffects(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license", "identify"} {
+	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
 		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
 			var output bytes.Buffer
 			calls := 0
@@ -165,36 +165,6 @@ func TestCLIReportsOutputErrors(t *testing.T) {
 	for _, args := range [][]string{nil, {"version"}, {"license"}, {"stop", "--help"}} {
 		if code, err := dispatch(args, "test", testCommands(t, failingCLIWriter{}, nil), failingCLIWriter{}); code != 1 || !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("%v: %d, %v", args, code, err)
-		}
-	}
-}
-
-func TestCLIRoutesIdentifyAndExplainsBoardConfirmation(t *testing.T) {
-	t.Setenv("PIPKIN_HOME", t.TempDir())
-	calls := 0
-	wantArgs := []string{"--port", "TESTPORT", "--issue", "--board", "esp32-2432s028r-dual-usb"}
-	commands := testCommands(t, io.Discard, map[string]func([]string) error{"identify": func(args []string) error {
-		calls++
-		if strings.Join(args, " ") != strings.Join(wantArgs, " ") {
-			t.Fatalf("identify arguments: %v", args)
-		}
-		return nil
-	}})
-	if code, err := dispatch(append([]string{"identify"}, wantArgs...), "test", commands, io.Discard); code != 0 || err != nil || calls != 1 {
-		t.Fatalf("identify: code=%d error=%v calls=%d", code, err, calls)
-	}
-	for _, args := range [][]string{{"identify", "--json", "--issue"}, {"identify", "--board="}} {
-		if code, err := dispatch(args, "test", commands, io.Discard); code != 1 || err == nil || calls != 1 {
-			t.Fatalf("invalid identify options: %v code=%d error=%v calls=%d", args, code, err, calls)
-		}
-	}
-	var output bytes.Buffer
-	if code, err := dispatch([]string{"identify", "--help"}, "test", commands, &output); code != 0 || err != nil || calls != 1 {
-		t.Fatalf("identify help: code=%d error=%v calls=%d", code, err, calls)
-	}
-	for _, wanted := range []string{"temporarily restarts", "physical board", "MAC address", "--issue", "No issue is sent", "--board PROFILE"} {
-		if !strings.Contains(output.String(), wanted) {
-			t.Fatalf("identify help omits %q: %s", wanted, output.String())
 		}
 	}
 }

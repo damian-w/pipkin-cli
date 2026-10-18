@@ -94,14 +94,14 @@ func TestPowerEventAcknowledgesAfterBoundedSerialAttempt(t *testing.T) {
 
 func TestPreSleepConfirmationRequiresAcceptedSequence(t *testing.T) {
 	h, _ := testHelper()
-	port := &fakePort{incoming: []byte("v=1 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")}
+	port := &fakePort{incoming: []byte("v=2 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")}
 	h.conn = &connection{port: port, name: "COM1"}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if h.confirmHostPower(ctx, 1) || ctx.Err() == nil {
 		t.Fatal("an old identity response acknowledged a newer sleep report")
 	}
-	port.incoming = []byte("v=1 kind=identity product=pipkin seq=1 clock_epoch=0 unix=null\n")
+	port.incoming = []byte("v=2 kind=identity product=pipkin seq=1 clock_epoch=0 unix=null\n")
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if !h.confirmHostPower(ctx, 1) || ctx.Err() != nil || len(port.written) != 2 {
@@ -111,8 +111,8 @@ func TestPreSleepConfirmationRequiresAcceptedSequence(t *testing.T) {
 
 func TestSleepConfirmationRejectsAheadSequenceOrChangedEpoch(t *testing.T) {
 	for _, reply := range []string{
-		"v=1 kind=identity product=pipkin seq=10 clock_epoch=0 unix=null\n",
-		"v=1 kind=identity product=pipkin seq=1 clock_epoch=1 unix=null\n",
+		"v=2 kind=identity product=pipkin seq=10 clock_epoch=0 unix=null\n",
+		"v=2 kind=identity product=pipkin seq=1 clock_epoch=1 unix=null\n",
 	} {
 		h, _ := testHelper()
 		h.sequence = 1
@@ -139,7 +139,7 @@ func TestPreSleepNativeAckFollowsFirmwareAcceptance(t *testing.T) {
 		if !strings.Contains(line, "state=asleep") {
 			t.Fatal("pre-sleep report did not put the display to sleep")
 		}
-		port.incoming = []byte(fmt.Sprintf("v=1 kind=identity product=pipkin seq=%d clock_epoch=0 unix=null\n", h.sequence))
+		port.incoming = []byte(fmt.Sprintf("v=2 kind=identity product=pipkin seq=%d clock_epoch=0 unix=null\n", h.sequence))
 		return port.Write(ctx, []byte(line))
 	}
 	h.handlePowerEvent(powerEvent{kind: powerSystemSleep, active: true, done: done})
@@ -148,7 +148,7 @@ func TestPreSleepNativeAckFollowsFirmwareAcceptance(t *testing.T) {
 	default:
 		t.Fatal("firmware acceptance did not release native sleep")
 	}
-	if len(port.incoming) != 0 || len(port.written) != 2 || port.written[1] != "v=1 kind=identify\n" {
+	if len(port.incoming) != 0 || len(port.written) != 2 || port.written[1] != "v=2 kind=identify\n" {
 		t.Fatal("native sleep was acknowledged without checking firmware acceptance")
 	}
 }

@@ -158,12 +158,6 @@ func readableTaskSnapshot(snapshot *TaskSnapshot, running bool, now time.Time) *
 	return &copy
 }
 
-// Protocol 2 displays accept task records; earlier firmware rejects them.
-func acceptsTasks(identity map[string]string) bool {
-	maximum, ok := decimalUint(identity["protocol_max"])
-	return ok && maximum >= 2
-}
-
 // taskFields formats a provider's observed counts for the display. Idle and unknown
 // tasks, task IDs and source update times stay on the computer.
 func taskFields(provider string, snapshot *TaskSnapshot) string {

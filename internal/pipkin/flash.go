@@ -22,8 +22,8 @@ import (
 )
 
 type flashOptions struct {
-	Port, Version, Board string
-	Reinstall            bool
+	Port, Version string
+	Reinstall     bool
 }
 
 // parseOptions parses flag-only arguments. The named string options need a value.
@@ -68,9 +68,8 @@ func parseFlashOptions(args []string) (flashOptions, error) {
 	if err := parseOptions("flash", args, func(flags *flag.FlagSet) {
 		flags.StringVar(&options.Port, "port", "", "serial port")
 		flags.StringVar(&options.Version, "version", "", "stable firmware version")
-		flags.StringVar(&options.Board, "board", "", "physically confirmed board profile")
 		flags.BoolVar(&options.Reinstall, "reinstall", false, "reinstall the same firmware version")
-	}, "port", "version", "board"); err != nil {
+	}, "port", "version"); err != nil {
 		return options, err
 	}
 	if !validPortOption(options.Port) {
@@ -82,14 +81,12 @@ func parseFlashOptions(args []string) (flashOptions, error) {
 		}
 		options.Version = strings.TrimPrefix(options.Version, "v")
 	}
-	if err := validateIdentifyBoard(options.Board); err != nil {
-		return options, err
-	}
 	return options, nil
 }
 
 type firmwareFlasher interface {
-	boardInspector
+	Probe(context.Context, string) (flashProbe, error)
+	Reset(context.Context, string) error
 	Read(context.Context, string, int64, int64) ([]byte, error)
 	Write(context.Context, string, []flashWriteImage) error
 	EraseSettings(context.Context, string) error
@@ -105,7 +102,7 @@ func defaultFlashActions() flashActions {
 	return flashActions{
 		boardActions: defaultBoardActions(),
 		load: func(ctx context.Context, selected string) (*firmwareRelease, error) {
-			return publicFirmwareSource().stage(ctx, selected, version, filepath.Join(appDir(), "cache", "firmware"))
+			return publicFirmwareSource().stage(ctx, selected, filepath.Join(appDir(), "cache", "firmware"))
 		},
 		prepare: func(ctx context.Context, output io.Writer) (firmwareFlasher, error) {
 			return prepareFlashTool(ctx, output)
@@ -113,7 +110,7 @@ func defaultFlashActions() flashActions {
 	}
 }
 
-// boardActions free the display's serial port from the helper for a board operation.
+// boardActions free the display's serial port from the helper while flashing.
 type boardActions struct {
 	ports    func() []string
 	identity func(context.Context, string, time.Duration) (map[string]string, error)
@@ -126,9 +123,9 @@ func defaultBoardActions() boardActions {
 	return boardActions{ports: candidatePorts, identity: readFlashIdentity, running: helperRunning, stop: stopHelper, start: startHelper}
 }
 
-// boardSession holds the installation and maintenance locks for one board
-// operation. close resets the board and resumes the helper independently of
-// the operation's cancelled context.
+// boardSession holds the installation and maintenance locks while flashing.
+// close resets the board and resumes the helper independently of the
+// operation's cancelled context.
 type boardSession struct {
 	boardActions
 	installation, maintenance *os.File
@@ -236,14 +233,14 @@ func validateFlashIdentity(identity map[string]string, manifest firmwareManifest
 	if identity == nil {
 		return nil
 	}
-	if !isIdentity(identity) || identity["firmware"] == "" || identity["chip"] != manifest.Chip || !sameFirmwareBoard(identity["board"], manifest.Board) || identity["protocol_min"] != "1" || identity["protocol_max"] == "" || (identity["hardware"] != "unconfirmed" && identity["hardware"] != "confirmed") {
+	if !isIdentity(identity) || identity["firmware"] == "" || identity["board"] != manifest.Board {
 		return errors.New("connected Pipkin reports an unsupported or incomplete board identity; no firmware was written")
 	}
 	return nil
 }
 
-func validateFlashProbe(probe flashProbe, manifest firmwareManifest) error {
-	if probe.Chip != manifest.Chip || probe.FlashBytes != manifest.FlashSize || probe.MAC == "" {
+func validateFlashProbe(probe flashProbe) error {
+	if probe.Chip != "esp32" || probe.FlashBytes != baselineFlashBytes || probe.MAC == "" {
 		return errors.New("connected board does not match the required ESP32 with 4 MB flash; no firmware was written")
 	}
 	if probe.Secure {
@@ -306,7 +303,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	defer release.close()
 	selectedVersion = release.Manifest.Version
 	// Reject invalid injected or stale metadata before preparing the flasher too.
-	if err := validateFirmwareManifest(release.Manifest, release.Tag, version); err != nil {
+	if err := validateFirmwareManifest(release.Manifest, release.Tag); err != nil {
 		return err
 	}
 	tool, err := actions.prepare(ctx, output)
@@ -324,13 +321,9 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if identity != nil {
 		installed = strings.TrimPrefix(identity["firmware"], "v")
 		if installed == release.Manifest.Version && !options.Reinstall {
-			err := writeOutputLine(output, "", "Pipkin firmware "+release.Manifest.Version+" is up to date. Use --reinstall to flash it again.")
-			if err == nil && options.Board != "" {
-				err = writeOutputLine(output, "", "To save the board type without flashing, run 'pipkin identify --board "+options.Board+"'.")
-			}
-			return err
+			return writeOutputLine(output, "", "Pipkin firmware "+release.Manifest.Version+" is up to date. Use --reinstall to flash it again.")
 		}
-		if newerStableFirmware(identity["firmware"], release.Manifest.Version) && options.Version == "" {
+		if newerVersion(identity["firmware"], release.Manifest.Version) && options.Version == "" {
 			return fmt.Errorf("your display has newer firmware than the latest release; to downgrade, run 'pipkin flash --version %s'", release.Manifest.Version)
 		}
 	}
@@ -342,24 +335,8 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return fmt.Errorf("could not check the ESP32 bootloader (close other serial tools, or hold BOOT while connecting): %w", err)
 	}
-	if err := validateFlashProbe(probe, release.Manifest); err != nil {
+	if err := validateFlashProbe(probe); err != nil {
 		return err
-	}
-	var boardInfo identifyBoardInfo
-	if options.Board != "" {
-		p, v, err := physicalBoardProfile(options.Board)
-		if err != nil {
-			return err
-		}
-		boardInfo = catalogBoardInfo(p, v, "confirmed for this flash")
-	} else {
-		boardInfo, err = inspectBoard(probe, "")
-		if err != nil {
-			return err
-		}
-	}
-	if boardInfo.Profile != "" && !sameFirmwareBoard(boardInfo.FirmwareProfile, release.Manifest.Board) {
-		return errors.New("confirmed board profile is incompatible with the selected firmware; no firmware was written")
 	}
 	partition, partitionPath := release.image("partition-table")
 	expectedTable, err := os.ReadFile(partitionPath)
@@ -388,7 +365,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 			if installed == release.Manifest.Version && !options.Reinstall {
 				return fmt.Errorf("Pipkin firmware %s is installed but not responding; run 'pipkin flash --reinstall' to repair it", storedVersion)
 			}
-			if newerStableFirmware(storedVersion, release.Manifest.Version) && options.Version == "" {
+			if newerVersion(storedVersion, release.Manifest.Version) && options.Version == "" {
 				return fmt.Errorf("your display has newer firmware than the latest release; to downgrade, run 'pipkin flash --version %s'", release.Manifest.Version)
 			}
 		}
@@ -401,20 +378,12 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		action = "Update"
 		if options.Reinstall && installed == release.Manifest.Version {
 			action = "Reinstall"
-		} else if newerStableFirmware(installed, release.Manifest.Version) {
+		} else if newerVersion(installed, release.Manifest.Version) {
 			action = "Downgrade"
 		}
 	}
-	boardName := ""
-	if boardInfo.Profile != "" {
-		boardName = boardInfo.Name + " (" + boardInfo.Profile + ")"
-	}
-	profiles, err := boardProfiles()
-	if err != nil {
-		return err
-	}
 	prompt, err := writeFlashPlan(output, flashPlan{action: action, installed: installed, selected: release.Manifest.Version,
-		port: port, boardName: boardName, profile: boardInfo.Profile, stored: stored, firmwareProfiles: len(profiles)})
+		port: port, stored: stored})
 	if err != nil {
 		return err
 	}
@@ -431,16 +400,11 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return err
 	}
-	if err := validateFlashProbe(confirmedProbe, release.Manifest); err != nil {
+	if err := validateFlashProbe(confirmedProbe); err != nil {
 		return err
 	}
 	if confirmedProbe.MAC != probe.MAC {
 		return errors.New("the board changed after confirmation; no firmware was written, run pipkin flash again")
-	}
-	if options.Board != "" {
-		if _, err := inspectBoard(confirmedProbe, options.Board); err != nil {
-			return err
-		}
 	}
 	var images []flashWriteImage
 	for _, image := range release.Manifest.Images {
@@ -596,10 +560,8 @@ func flashCancellationNotice(ctx context.Context, output io.Writer) func() {
 }
 
 type flashPlan struct {
-	action, installed, selected string
-	port, boardName, profile    string
-	stored                      bool
-	firmwareProfiles            int
+	action, installed, selected, port string
+	stored                            bool
 }
 
 func writeFlashPlan(output io.Writer, plan flashPlan) (string, error) {
@@ -619,22 +581,19 @@ func writeFlashPlan(output io.Writer, plan flashPlan) (string, error) {
 	lines.line("", "")
 	lines.line("", heading)
 	if plan.stored {
-		lines.line("", "Current: Pipkin "+plan.installed+" (installed but not responding)")
+		state := "installed but not responding"
+		if numbers, ok := stableVersionNumbers(plan.installed); ok && numbers[0] != protocolVersion {
+			state = "too old for this version of Pipkin"
+		}
+		lines.line("", "Current: Pipkin "+plan.installed+" ("+state+")")
 	}
 	if plan.action != "Install" {
 		lines.line("", "Your settings are kept.")
 		return prompt, lines.err
 	}
-	board := "CYD, 2.8-inch touch display"
-	if plan.boardName != "" {
-		board = plan.boardName
-	}
-	lines.line("", "Board: "+board)
+	lines.line("", "Board: CYD, 2.8-inch touch display")
 	lines.line("", "Port: "+plan.port)
 	lines.line("", "This replaces the board's current firmware and settings.")
-	if plan.profile == "" && plan.firmwareProfiles > 1 {
-		lines.line("", "The physical board profile is unconfirmed. Inspect the PCB and use 'pipkin identify --board PROFILE' to remember it.")
-	}
 	return prompt, lines.err
 }
 

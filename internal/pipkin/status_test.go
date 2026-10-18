@@ -224,7 +224,7 @@ func TestStatusDisplayHintsUseErrorDetailNotPortName(t *testing.T) {
 		{"/dev/permission denied: resource busy", "darwin", "Another app may", "Check its permissions"},
 		{"COM9: Access is denied.", "windows", "Another app may", "Another app is"},
 		{"port: unfamiliar failure", "darwin", "USB data cable", "Another app"},
-		{"", "darwin", "self-built display", "Last connection attempt"},
+		{"", "darwin", "update its firmware", "Last connection attempt"},
 	} {
 		var out bytes.Buffer
 		if err := writeDisplayHint(&out, c.reason, c.goos); err != nil {

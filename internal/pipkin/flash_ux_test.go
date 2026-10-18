@@ -95,7 +95,7 @@ func TestFlashCancellationDuringCriticalPhasesFinishesSafely(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			f := newFlashFixture(t)
 			if phase == "update write" {
-				f.initial = testFlashIdentity("1.0.0")
+				f.initial = testFlashIdentity("2.0.0")
 			}
 			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), flashTestContextKey{}, "fixture"))
 			defer cancel()
@@ -145,7 +145,7 @@ func TestFlashCancellationDuringCriticalPhasesFinishesSafely(t *testing.T) {
 				t.Fatal("cancellation skipped firmware verification, restart, boot check or helper restoration")
 			}
 			text := f.output.String()
-			if strings.Count(text, "Finishing the firmware write. Keep the cable plugged in.") != 1 || strings.Contains(text, "No firmware was written") || strings.Index(text, "Finishing the firmware write") > strings.Index(text, "1.0.1 is running") {
+			if strings.Count(text, "Finishing the firmware write. Keep the cable plugged in.") != 1 || strings.Contains(text, "No firmware was written") || strings.Index(text, "Finishing the firmware write") > strings.Index(text, "2.0.1 is running") {
 				t.Fatal(text)
 			}
 		})
@@ -287,18 +287,14 @@ func TestFlashWriterFailuresRespectTheWriteBoundary(t *testing.T) {
 }
 
 func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
-	for _, c := range []struct {
-		action, profile string
-		profiles        int
-		warning         bool
-	}{{"Install", "", 1, false}, {"Install", "", 2, true}, {"Install", "confirmed", 2, false}, {"Update", "", 2, false}, {"Reinstall", "", 2, false}, {"Downgrade", "", 2, false}} {
-		t.Run(c.action+c.profile+string(rune('0'+c.profiles)), func(t *testing.T) {
+	for _, action := range []string{"Install", "Update", "Reinstall", "Downgrade"} {
+		t.Run(action, func(t *testing.T) {
 			var output bytes.Buffer
-			prompt, err := writeFlashPlan(&output, flashPlan{action: c.action, installed: "1.0.0", selected: "1.0.1", port: "TESTPORT", profile: c.profile, firmwareProfiles: c.profiles})
+			prompt, err := writeFlashPlan(&output, flashPlan{action: action, installed: "2.0.0", selected: "2.0.1", port: "TESTPORT"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(output.String(), "profile is unconfirmed") != c.warning || strings.Contains(prompt, "Confirm this is a CYD") != (c.action == "Install") || strings.Contains(output.String(), "Your settings are kept") != (c.action != "Install") {
+			if strings.Contains(prompt, "Confirm this is a CYD") != (action == "Install") || strings.Contains(output.String(), "Your settings are kept") != (action != "Install") {
 				t.Fatal(output.String(), prompt)
 			}
 			for _, line := range strings.Split(output.String(), "\n") {
@@ -309,10 +305,6 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 		})
 	}
 	f := newFlashFixture(t)
-	profiles, err := boardProfiles()
-	if err != nil {
-		t.Fatal(err)
-	}
 	f.tool.onProbe = func(context.Context, int) {
 		if !strings.Contains(f.output.String(), "screen may go blank") {
 			t.Error("screen blanked before its warning")
@@ -326,9 +318,6 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 	if err := f.run(context.Background(), flashOptions{}, "yes\n"); err != nil {
 		t.Fatal(err)
 	}
-	if len(profiles) == 1 && strings.Contains(f.output.String(), "profile is unconfirmed") {
-		t.Fatal("physical variants were counted as separate firmware profiles", f.output.String())
-	}
 	for _, line := range strings.Split(f.output.String(), "\n") {
 		if len(line) >= 80 {
 			t.Fatalf("flash output exceeds terminal width: %q", line)
@@ -337,7 +326,7 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 }
 
 func flashRecoveryHint(goos, port string) string {
-	return commandHintFor(goos, "/unused", true, "flash", "--port", port, "--version", "1.0.1", "--reinstall")
+	return commandHintFor(goos, "/unused", true, "flash", "--port", port, "--version", "2.0.1", "--reinstall")
 }
 
 func TestFlashRecoveryIsReadableSafeAndPreservesCause(t *testing.T) {
@@ -345,7 +334,7 @@ func TestFlashRecoveryIsReadableSafeAndPreservesCause(t *testing.T) {
 	for _, written := range []bool{false, true} {
 		err := &flashWriteFailure{cause: boom, written: written, command: flashRecoveryHint("darwin", "TESTPORT")}
 		text := err.Error()
-		if !errors.Is(err, boom) || strings.Contains(text, "didn't finish") == written || strings.Index(text, "To fix it:") > strings.Index(text, "Details:") || !strings.Contains(text, "pipkin flash --port TESTPORT --version 1.0.1 --reinstall") {
+		if !errors.Is(err, boom) || strings.Contains(text, "didn't finish") == written || strings.Index(text, "To fix it:") > strings.Index(text, "Details:") || !strings.Contains(text, "pipkin flash --port TESTPORT --version 2.0.1 --reinstall") {
 			t.Fatal(text)
 		}
 		for _, line := range strings.Split(text, "\n") {

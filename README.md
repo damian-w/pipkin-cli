@@ -115,7 +115,7 @@ firmware. The [data sources guide](docs/data-sources.md) has the details.
 Everything Pipkin reads is also available as JSON for your own scripts and
 dashboards: run `pipkin usage --json` or `pipkin tasks --json`, or see the
 [JSON output reference](docs/output.md).
-The display talks a simple text [protocol](docs/protocol.md) over USB serial.
+The display talks a simple text [protocol](https://github.com/damian-w/pipkin/blob/main/docs/protocol.md) over USB serial.
 
 To build from source, install the Go version listed in [go.mod](go.mod), then run:
 

@@ -23,7 +23,7 @@ The display stops updating. Run 'pipkin start' to resume sooner.
 `
 
 const uninstallHelp = `
-Also removes Pipkin's settings, saved boards and logs. Your Claude and Codex
+Also removes Pipkin's settings and logs. Your Claude and Codex
 sign-ins are kept.
 `
 
@@ -53,7 +53,6 @@ Ctrl-C is safe until writing starts.
   --reinstall        Write the same version again to repair a failed update
   --port PORT        Choose a port, e.g. /dev/cu.usbserial-110 or COM9
   --version VERSION  Install a specific firmware version
-  --board PROFILE    For board builders; see 'pipkin help identify'
 
 Guide: github.com/damian-w/pipkin-cli/blob/main/docs/firmware.md
 `

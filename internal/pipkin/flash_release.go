@@ -19,8 +19,10 @@ import (
 
 const firmwareRepository = "damian-w/pipkin"
 
-// The single-app ESP-IDF layout (esp32-single-app-v1) this CLI installs. Board
-// settings live in NVS, between the partition table and the application.
+// The only board the firmware supports. Its single-app ESP-IDF layout keeps
+// board settings in NVS, between the partition table and the application.
+const firmwareBoard = "esp32-2432s028r"
+
 const (
 	bootloaderOffset     = 0x1000
 	bootloaderMaxSize    = 0x7000
@@ -45,20 +47,10 @@ type firmwareImage struct {
 }
 
 type firmwareManifest struct {
-	SchemaVersion  int             `json:"schema_version"`
 	Product        string          `json:"product"`
 	Version        string          `json:"version"`
 	SourceRevision string          `json:"source_revision"`
 	Board          string          `json:"board"`
-	Hardware       string          `json:"hardware"`
-	Chip           string          `json:"chip"`
-	FlashSize      int64           `json:"flash_size"`
-	FlashMode      string          `json:"flash_mode"`
-	FlashFreq      string          `json:"flash_freq"`
-	ProtocolMin    int             `json:"protocol_min"`
-	ProtocolMax    int             `json:"protocol_max"`
-	MinimumCLI     string          `json:"minimum_cli"`
-	Layout         string          `json:"layout"`
 	Images         []firmwareImage `json:"images"`
 }
 
@@ -79,33 +71,27 @@ func (r *firmwareRelease) image(role string) (firmwareImage, string) {
 	return firmwareImage{}, ""
 }
 
-// Keep the first public partition layout explicit. Future layouts need a migration
-// design; a new manifest must not silently authorize erasing an owner's settings.
-func validateFirmwareManifest(m firmwareManifest, tag, cliVersion string) error {
-	if m.SchemaVersion != 1 || m.Product != "pipkin" {
+// validateFirmwareManifest accepts only firmware with this CLI's major version,
+// for the one supported board and flash layout.
+func validateFirmwareManifest(m firmwareManifest, tag string) error {
+	if m.Product != "pipkin" {
 		return errors.New("unsupported firmware manifest")
 	}
-	if _, valid := stableVersionNumbers(m.Version); !valid || strings.HasPrefix(m.Version, "v") || tag != "v"+m.Version {
+	numbers, valid := stableVersionNumbers(m.Version)
+	if !valid || strings.HasPrefix(m.Version, "v") || tag != "v"+m.Version {
 		return errors.New("firmware manifest version does not match its stable release tag")
+	}
+	if numbers[0] > protocolVersion {
+		return fmt.Errorf("firmware %s needs a newer Pipkin; run 'pipkin update' first", m.Version)
+	}
+	if numbers[0] < protocolVersion {
+		return fmt.Errorf("firmware %s is too old for this version of Pipkin", m.Version)
 	}
 	if !firmwareRevision.MatchString(m.SourceRevision) {
 		return errors.New("firmware manifest has no valid source revision")
 	}
-	if _, valid := stableVersionNumbers(m.MinimumCLI); !valid || strings.HasPrefix(m.MinimumCLI, "v") {
-		return errors.New("firmware manifest has an invalid minimum CLI version")
-	}
-	if _, valid := stableVersionNumbers(cliVersion); !valid || newerStableFirmware(m.MinimumCLI, cliVersion) {
-		return fmt.Errorf("firmware requires CLI %s or later; run pipkin update", m.MinimumCLI)
-	}
-	profile, supported := firmwareBoardProfile(m.Board)
-	if !supported || (m.Hardware != "unconfirmed" && m.Hardware != "confirmed") || m.Chip != profile.Chip {
-		return errors.New("release does not support the ESP32-2432S028R board profile")
-	}
-	if m.ProtocolMin != 1 || m.ProtocolMax < 1 {
-		return errors.New("release is incompatible with the display protocol supported by this CLI")
-	}
-	if m.FlashSize != profile.FlashSize || m.FlashMode != profile.FlashMode || m.FlashFreq != profile.FlashFreq || m.Layout != profile.Layout {
-		return errors.New("release uses an unsupported flash layout or flash settings")
+	if m.Board != firmwareBoard {
+		return errors.New("release does not support the ESP32-2432S028R board")
 	}
 	if len(m.Images) != 3 {
 		return errors.New("release must contain bootloader, partition table and application images")
@@ -189,7 +175,7 @@ func (s firmwareSource) release(ctx context.Context, endpoint string) (firmwareR
 	return release, nil
 }
 
-func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, parent string) (_ *firmwareRelease, err error) {
+func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent string) (_ *firmwareRelease, err error) {
 	endpoint := s.api + "/releases/latest"
 	if selectedVersion != "" {
 		if !stableFirmwareVersion.MatchString(selectedVersion) {
@@ -246,7 +232,7 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, cliVersion, 
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return nil, errors.New("firmware manifest contains trailing data")
 	}
-	if err := validateFirmwareManifest(manifest, release.Tag, cliVersion); err != nil {
+	if err := validateFirmwareManifest(manifest, release.Tag); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -296,20 +282,6 @@ func stableVersionNumbers(text string) ([3]uint64, bool) {
 		result[i] = n
 	}
 	return result, true
-}
-
-func newerStableFirmware(candidate, current string) bool {
-	a, aOK := stableVersionNumbers(candidate)
-	b, bOK := stableVersionNumbers(current)
-	if !aOK || !bOK {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
 }
 
 func sha256Hex(data []byte) string {
