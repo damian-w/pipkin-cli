@@ -1,7 +1,6 @@
 package pipkin
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -12,7 +11,6 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -44,7 +42,7 @@ type codexTaskMessage struct {
 	Type              string          `json:"type"`
 	Method            string          `json:"method"`
 	Version           int             `json:"version"`
-	RequestID         json.RawMessage `json:"requestId"`
+	RequestID         string          `json:"requestId"`
 	ResultType        string          `json:"resultType"`
 	HandledByClientID string          `json:"handledByClientId"`
 	SourceClientID    string          `json:"sourceClientId"`
@@ -135,7 +133,7 @@ func collectCodexTasksWith(ctx context.Context, opts codexTaskOptions) TaskProvi
 	if opts.candidates != nil {
 		catalogCtx, done := context.WithTimeout(ctx, 400*time.Millisecond)
 		for _, id := range opts.candidates(catalogCtx) {
-			if codexTaskID(id) && len(observer.catalog) < codexTaskMaxCandidates {
+			if len(observer.catalog) < codexTaskMaxCandidates {
 				observer.catalog[id] = true
 				observer.enqueue(id, false)
 			}
@@ -283,20 +281,10 @@ func (o *codexTaskObserver) enqueue(id string, priority bool) {
 }
 
 func (o *codexTaskObserver) send(message map[string]any) error {
-	typeName, _ := message["type"].(string)
 	method, _ := message["method"].(string)
-	allowed := typeName == "request" && (method == "initialize" || method == "thread-owner-discovery") ||
-		typeName == "broadcast" && method == "thread-stream-following-changed"
-	if typeName == "client-discovery-response" {
-		response, _ := message["response"].(map[string]any)
-		allowed = len(response) == 1 && response["canHandle"] == false
-	}
-	if !allowed {
-		return errCodexTaskState
-	}
 	o.trace("send", method, 0)
 	body, err := json.Marshal(message)
-	if err != nil || len(body) > 4096 {
+	if err != nil {
 		return errCodexTaskState
 	}
 	frame := make([]byte, len(body)+4)
@@ -321,7 +309,7 @@ func (o *codexTaskObserver) send(message map[string]any) error {
 
 func (o *codexTaskObserver) follow(id string, value bool) error {
 	stream := o.streams[id]
-	if stream == nil || !codexTaskID(stream.owner) || stream.retired {
+	if stream == nil || stream.retired {
 		return errCodexTaskState
 	}
 	return o.send(map[string]any{"type": "broadcast", "method": "thread-stream-following-changed", "version": 1,
@@ -329,21 +317,13 @@ func (o *codexTaskObserver) follow(id string, value bool) error {
 }
 
 func (o *codexTaskObserver) receive(frame []byte) error {
-	if raw := bytes.TrimSpace(frame); len(raw) == 0 || raw[0] != '{' {
-		o.trace("frame_shape_invalid", "", len(frame))
-		return errCodexTaskState
-	}
 	var message codexTaskMessage
-	if json.Unmarshal(frame, &message) != nil {
-		o.trace("frame_json_invalid", "", len(frame))
+	if json.Unmarshal(frame, &message) != nil || message.Type == "" || len(message.RequestID) > 128 {
+		o.trace("frame_invalid", "", len(frame))
 		return errCodexTaskState
 	}
 	o.trace("receive", message.Method, len(frame))
-	var requestID string
-	if len(message.RequestID) > 0 && (json.Unmarshal(message.RequestID, &requestID) != nil || len(requestID) > 128) {
-		o.trace("request_id_invalid", message.Method, 0)
-		return errCodexTaskState
-	}
+	requestID := message.RequestID
 	switch message.Type {
 	case "client-discovery-request":
 		if requestID == "" {
@@ -503,8 +483,7 @@ func (o *codexTaskObserver) result() TaskProvider {
 		}
 		result.Tasks = append(result.Tasks, task)
 	}
-	sort.Slice(result.Tasks, func(i, j int) bool { return result.Tasks[i].ID < result.Tasks[j].ID })
-	return result
+	return normalizeTaskProvider(result)
 }
 
 // trace feeds the opt-in live test; it never sees IDs, payloads or paths.

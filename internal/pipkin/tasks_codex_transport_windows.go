@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -24,11 +23,8 @@ func (codexPipeAddr) String() string  { return "codex-local-ipc" }
 
 type codexPipeConn struct{ *os.File }
 
-func (c *codexPipeConn) LocalAddr() net.Addr                { return codexPipeAddr{} }
-func (c *codexPipeConn) RemoteAddr() net.Addr               { return codexPipeAddr{} }
-func (c *codexPipeConn) SetDeadline(t time.Time) error      { return c.File.SetDeadline(t) }
-func (c *codexPipeConn) SetReadDeadline(t time.Time) error  { return c.File.SetReadDeadline(t) }
-func (c *codexPipeConn) SetWriteDeadline(t time.Time) error { return c.File.SetWriteDeadline(t) }
+func (c *codexPipeConn) LocalAddr() net.Addr  { return codexPipeAddr{} }
+func (c *codexPipeConn) RemoteAddr() net.Addr { return codexPipeAddr{} }
 
 func openCodexNamedPipe(ctx context.Context, name string, validate func(windows.Handle) error) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
@@ -54,7 +50,7 @@ func openCodexNamedPipe(ctx context.Context, name string, validate func(windows.
 		return nil, errors.New("Codex local pipe is unavailable")
 	}
 	// os.NewFile registers overlapped handles with Go's poller for deadlines.
-	return boundCodexIPCConn(ctx, &codexPipeConn{file})
+	return &codexPipeConn{file}, nil
 }
 
 func codexProcessSID(process windows.Handle) (*windows.SID, error) {

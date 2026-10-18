@@ -18,7 +18,6 @@ import (
 var repository = envOr("PIPKIN_REPOSITORY", "damian-w/pipkin-cli")
 
 func installCommand() error {
-	home, _ := os.UserHomeDir()
 	return runInstallCommand(os.Stdout, installCommandDeps{
 		buildVersion: version, goos: runtime.GOOS,
 		lock: func() (io.Closer, error) { return acquireFileLock(installationLockPath()) },
@@ -39,8 +38,7 @@ func installCommand() error {
 			authorizeInstalledHelperWithNoticeFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, noticeOut, warningOut)
 		},
 		hint: commandHint, pathFix: installPathFix(runtime.GOOS, launcherPath(), onPath(filepath.Dir(launcherPath()))),
-		persistentPathFix: installPersistentPathFix(runtime.GOOS, os.Getenv("SHELL"), home, os.Getenv("ZDOTDIR"), launcherPath(), onPath(filepath.Dir(launcherPath()))),
-		permissionHint:    serialPermissionHint,
+		permissionHint: serialPermissionHint,
 	})
 }
 
@@ -149,10 +147,11 @@ func authorizeInstalledHelperWithNoticeFor(goos string, signedIn func() bool, ru
 	if goos != "darwin" || !signedIn() {
 		return
 	}
+	_ = writeOutputLine(noticeOut, "", authorizePromptNotice)
 	// The updater is still the old executable. Keychain permission must be given
 	// to the replacement at its final path, before its first background read.
 	command := exec.Command(installedBinary(), "authorize")
-	command.Stdin, command.Stdout, command.Stderr = os.Stdin, newAuthorizeNoticeWriter(noticeOut), io.Discard
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, io.Discard, io.Discard
 	command.Env = append(os.Environ(), "PIPKIN_AUTHORIZE_NESTED=1")
 	if run(command) != nil {
 		fmt.Fprintf(warningOut, "Pipkin can't read Claude's sign-in yet. Run %s.\n", commandHint("authorize"))

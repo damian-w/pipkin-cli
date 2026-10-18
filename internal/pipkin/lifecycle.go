@@ -52,9 +52,18 @@ func publishPID() error {
 
 func removePID() error { return removeIfExists(pidPath()) }
 
+// runningPID checks the helper lock without creating files.
 func runningPID() (int, error) {
-	running, err := helperRunning()
-	if err != nil || !running {
+	file, err := os.OpenFile(lockPath(), os.O_RDWR, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	locked, err := tryFileLock(file)
+	if err != nil || locked {
 		return 0, err
 	}
 	record, err := readPIDRecord()

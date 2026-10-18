@@ -89,17 +89,3 @@ func TestCodexTransportDarwinValidatorFailureCloses(t *testing.T) {
 		t.Fatal("rejected connection remained open")
 	}
 }
-
-func TestCodexTransportDarwinConnectionDeadline(t *testing.T) {
-	path, _ := codexTransportTestSocket(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	conn, err := openCodexUnixIPC(ctx, path, func(*net.UnixConn) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.Read(make([]byte, 1)); err == nil {
-		t.Fatal("inactive socket ignored read deadline")
-	}
-}

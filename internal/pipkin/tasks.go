@@ -18,6 +18,7 @@ import (
 const (
 	taskCollectionBudget = 5 * time.Second
 	taskPollEvery        = 30 * time.Second
+	taskFreshFor         = 45 * time.Second // matches the display's task expiry
 )
 
 // Task holds only status metadata. UpdatedAt is the source's time, not a heartbeat.
@@ -102,17 +103,19 @@ func normalizeTaskProvider(p TaskProvider) TaskProvider {
 		if task.ID == "" {
 			continue
 		}
-		switch task.Status {
-		case "working", "needs_attention", "blocked", "idle", "unknown":
-		default:
+		if !slices.ContainsFunc(taskStatuses, func(s taskStatus) bool { return s.key == task.Status }) {
 			task.Status = "unknown"
 		}
 		if task.UpdatedAt != nil && validEpoch(float64(*task.UpdatedAt)) == 0 {
 			task.UpdatedAt = nil
 		}
-		if previous, ok := tasks[task.ID]; ok && previous.Status != task.Status {
+		if previous, ok := tasks[task.ID]; ok {
 			// Conflicting identities/states are uncertainty, not extra tasks.
-			task.Status, task.UpdatedAt = "unknown", nil
+			if previous.Status != task.Status {
+				task.Status, task.UpdatedAt = "unknown", nil
+			} else if previous.UpdatedAt != nil && (task.UpdatedAt == nil || *previous.UpdatedAt > *task.UpdatedAt) {
+				task.UpdatedAt = previous.UpdatedAt
+			}
 		}
 		tasks[task.ID] = task
 	}
@@ -123,15 +126,7 @@ func normalizeTaskProvider(p TaskProvider) TaskProvider {
 	for _, task := range tasks {
 		p.Tasks = append(p.Tasks, task)
 	}
-	slices.SortFunc(p.Tasks, func(a, b Task) int {
-		if a.ID < b.ID {
-			return -1
-		}
-		if a.ID > b.ID {
-			return 1
-		}
-		return 0
-	})
+	slices.SortFunc(p.Tasks, func(a, b Task) int { return strings.Compare(a.ID, b.ID) })
 	return p
 }
 
@@ -168,6 +163,10 @@ func runTasks(ctx context.Context, jsonOutput bool, out io.Writer, collect func(
 
 var taskProviders = []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude Code"}}
 
+type taskStatus struct{ key, label string }
+
+var taskStatuses = []taskStatus{{"working", "working"}, {"needs_attention", "waiting for you"}, {"blocked", "blocked"}, {"idle", "idle"}, {"unknown", "status unknown"}}
+
 // taskSummary counts a provider's tasks by status, or returns "" when none were seen.
 func taskSummary(p TaskProvider) string {
 	counts := map[string]int{}
@@ -175,7 +174,7 @@ func taskSummary(p TaskProvider) string {
 		counts[task.Status]++
 	}
 	var parts []string
-	for _, state := range []struct{ key, label string }{{"working", "working"}, {"needs_attention", "waiting for you"}, {"blocked", "blocked"}, {"idle", "idle"}, {"unknown", "status unknown"}} {
+	for _, state := range taskStatuses {
 		if count := counts[state.key]; count > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", count, state.label))
 		}

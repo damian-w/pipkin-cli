@@ -66,7 +66,7 @@ func readableTaskSnapshot(snapshot *TaskSnapshot, running bool, now time.Time) *
 		return nil
 	}
 	age := now.Unix() - snapshot.ObservedAt
-	if running && snapshot.ObservedAt > 0 && age >= 0 && age <= int64((taskPollEvery+taskCollectionBudget+tick)/time.Second) {
+	if running && snapshot.ObservedAt > 0 && age >= 0 && age < int64(taskFreshFor/time.Second) {
 		return snapshot
 	}
 	copy := *snapshot

@@ -92,37 +92,6 @@ func validateRemovalContents(dir, shown string) error {
 		}
 	}
 	unexpected := fmt.Errorf("%s has files or links Pipkin didn't create. Move them elsewhere, then try again.", terminalText(shown))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		directory := name == "bin" || name == "cache" || name == "tools"
-		file := name == "config.json" || name == "config.lock" || name == "status.json" || name == "boards.json" ||
-			name == "helper.lock" || name == "helper.pid" || name == "helper.log" || name == "helper.log.1" || name == ".DS_Store" ||
-			strings.HasPrefix(name, "config.json.backup-") || strings.HasPrefix(name, ".pipkin-")
-		info, err := entry.Info()
-		if err != nil || directory && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) || !directory && (!file || !info.Mode().IsRegular()) {
-			return unexpected
-		}
-	}
-	entries, err = os.ReadDir(filepath.Join(dir, "bin"))
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		known := name == executableName("pipkin") || name == executableName("pipkin")+".old" || name == ".DS_Store"
-		if runtime.GOOS == "windows" {
-			known = known || name == "pipkinw.exe" || name == "pipkinw.exe.old"
-		}
-		info, err := entry.Info()
-		staging := strings.HasPrefix(name, ".pipkin-stage-")
-		if err != nil || staging && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) || !staging && (!known || !info.Mode().IsRegular()) {
-			return unexpected
-		}
-	}
 	// Delayed cleanup must never recurse through a link or junction.
 	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -134,6 +103,31 @@ func validateRemovalContents(dir, shown string) error {
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() && !info.Mode().IsRegular() {
 			return unexpected
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		name := entry.Name()
+		switch filepath.Dir(rel) {
+		case ".":
+			if rel == "." {
+				return nil
+			}
+			directory := name == "bin" || name == "cache" || name == "tools"
+			file := name == "config.json" || name == "config.lock" || name == "status.json" || name == "boards.json" ||
+				name == "helper.lock" || name == "helper.pid" || name == "helper.log" || name == "helper.log.1" || name == ".DS_Store" ||
+				strings.HasPrefix(name, "config.json.backup-") || strings.HasPrefix(name, ".pipkin-")
+			if directory != info.IsDir() || !directory && !file {
+				return unexpected
+			}
+		case "bin":
+			staging := strings.HasPrefix(name, ".pipkin-stage-")
+			known := name == executableName("pipkin") || name == executableName("pipkin")+".old" || name == ".DS_Store" ||
+				runtime.GOOS == "windows" && (name == "pipkinw.exe" || name == "pipkinw.exe.old")
+			if staging != info.IsDir() || !staging && !known {
+				return unexpected
+			}
 		}
 		return nil
 	})

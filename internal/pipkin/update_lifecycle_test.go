@@ -49,7 +49,7 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 							t.Fatalf("authorization did not use the installed replacement: path=%q args=%q", command.Path, command.Args)
 						}
 						if command.Stdin != os.Stdin || command.Stdout == &output || command.Stderr == &output {
-							t.Fatal("authorization did not filter child output while retaining foreground input")
+							t.Fatal("authorization did not discard child output while retaining foreground input")
 						}
 						if !slices.Contains(command.Env, "PIPKIN_AUTHORIZE_NESTED=1") {
 							t.Fatal("nested authorization could restart while the installation lock is held")
@@ -80,7 +80,7 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 				if !strings.Contains(output.String(), "authorize") {
 					t.Fatalf("authorization cancellation omitted actionable recovery: %q", output.String())
 				}
-			} else if output.Len() != 0 {
+			} else if strings.Contains(output.String(), "sign-in yet") {
 				t.Fatalf("successful authorization reported a warning: %q", output.String())
 			}
 			for _, artifact := range staged.artifacts {

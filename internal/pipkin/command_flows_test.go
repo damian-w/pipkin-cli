@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 type flowTestLock struct{ closed bool }
@@ -227,215 +226,33 @@ func TestCommandHintsAndLockFailuresRemainSafeAndClassified(t *testing.T) {
 	}
 }
 
-func TestInstalledAuthorizationCapturesAndDiscardsBoundedChildOutput(t *testing.T) {
+func TestInstalledAuthorizationPrintsNoticeAndDiscardsChildOutput(t *testing.T) {
 	t.Setenv("PIPKIN_HOME", t.TempDir())
+	var notice bytes.Buffer
+	if err := writeOutputLine(&notice, "", authorizePromptNotice); err != nil {
+		t.Fatal(err)
+	}
 	for _, failed := range []bool{false, true} {
-		var output bytes.Buffer
-		authorizeInstalledHelperFor("darwin", func() bool { return true }, func(cmd *exec.Cmd) error {
+		var live, warnings bytes.Buffer
+		authorizeInstalledHelperWithNoticeFor("darwin", func() bool { return true }, func(cmd *exec.Cmd) error {
 			if cmd.Path != installedBinary() || !slices.Contains(cmd.Env, "PIPKIN_AUTHORIZE_NESTED=1") {
 				t.Fatal("authorization did not use the nested installed replacement")
 			}
-			for _, writer := range []io.Writer{cmd.Stdout, cmd.Stderr} {
-				if _, err := writer.Write(bytes.Repeat([]byte("synthetic-private-output"), 1024)); err != nil {
-					t.Fatal(err)
-				}
+			if cmd.Stdout != io.Discard || cmd.Stderr != io.Discard {
+				t.Fatal("child output was not discarded")
 			}
-			if cmd.Stderr != io.Discard {
-				t.Fatal("child stderr was not discarded")
-			}
-			if _, ok := cmd.Stdout.(*authorizeNoticeWriter); !ok {
-				t.Fatal("child stdout was not restricted to the permission notice")
+			if live.String() != notice.String() {
+				t.Fatal("permission notice was not shown before authorization")
 			}
 			if failed {
 				return errors.New("synthetic failure")
 			}
 			return nil
-		}, &output)
-		if strings.Contains(output.String(), "synthetic-private") || strings.Contains(output.String(), "authorize") != failed {
-			t.Fatal("raw child output leaked or authorization failure was lost")
+		}, &live, &warnings)
+		if live.String() != notice.String() || strings.Contains(warnings.String(), "authorize") != failed {
+			t.Fatal("authorization duplicated its notice or lost recovery")
 		}
 	}
-}
-
-func TestInstalledAuthorizationForwardsOnlyStaticNoticeBeforeReturning(t *testing.T) {
-	t.Setenv("PIPKIN_HOME", t.TempDir())
-	var live, warnings, notice bytes.Buffer
-	if err := writeOutputLine(&notice, "", authorizePromptNotice); err != nil {
-		t.Fatal(err)
-	}
-	authorizeInstalledHelperWithNoticeFor("darwin", func() bool { return true }, func(cmd *exec.Cmd) error {
-		// Exercise arbitrary chunk boundaries and an overlapping prefix after
-		// private output. Only the known safe notice can appear immediately.
-		data := append([]byte("private-canary macO"), notice.Bytes()...)
-		for _, b := range data {
-			if _, err := cmd.Stdout.Write([]byte{b}); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if live.String() != notice.String() || warnings.Len() != 0 {
-			t.Fatal("permission notice was delayed or private child output escaped")
-		}
-		_, _ = cmd.Stdout.Write(notice.Bytes())
-		_, _ = io.WriteString(cmd.Stdout, "Claude's saved sign-in is ready.\nprivate-canary")
-		_, _ = io.WriteString(cmd.Stderr, "private-canary")
-		return errors.New("private-canary")
-	}, &live, &warnings)
-	if live.String() != notice.String() || !strings.Contains(warnings.String(), "authorize") || strings.Contains(live.String()+warnings.String(), "private-canary") {
-		t.Fatal("authorization duplicated its notice, leaked private output or lost recovery")
-	}
-}
-
-func TestPersistentPATHHintsAreOptionalAndDoNotWriteStartupFiles(t *testing.T) {
-	home := t.TempDir()
-	launcher := filepath.Join(home, "O'Brien", "bin", "pipkin")
-	for _, tc := range []struct{ goos, shell, zDotDir, suffix string }{
-		{"darwin", "/bin/zsh", "", ".zshrc"},
-		{"darwin", "/bin/bash", "", ".bash_profile"},
-		{"linux", "/bin/bash", "", ".bashrc"},
-		{"darwin", "/bin/zsh", filepath.Join(home, "custom"), "custom/.zshrc"},
-	} {
-		got := installPersistentPathFix(tc.goos, tc.shell, home, tc.zDotDir, launcher, false)
-		startup := filepath.Join(home, tc.suffix)
-		want := `printf '\n%s\n' ` + shellQuote(installPathFix(tc.goos, launcher, false)) + " >> " + shellQuote(startup)
-		if got != want {
-			t.Fatalf("startup hint is not exact or safely quoted: %q", got)
-		}
-		if _, err := os.Stat(startup); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("printing a hint touched the startup file")
-		}
-	}
-	for _, tc := range []struct {
-		goos, shell, zDotDir string
-		onPATH               bool
-	}{
-		{"darwin", "/bin/fish", "", false},
-		{"darwin", "", "", false},
-		{"darwin", "/bin/zsh", "relative", false},
-		{"windows", "/bin/bash", "", false},
-		{"darwin", "/bin/zsh", "", true},
-	} {
-		if got := installPersistentPathFix(tc.goos, tc.shell, home, tc.zDotDir, launcher, tc.onPATH); got != "" {
-			t.Fatalf("unknown or unneeded shell received a startup change: %q", got)
-		}
-	}
-}
-
-func TestPersistentPATHHintPreservesBashLoginSettings(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("requires a POSIX login shell")
-	}
-	if _, err := os.Stat("/bin/bash"); err != nil {
-		t.Skip("bash is unavailable")
-	}
-	for _, tc := range []struct {
-		name, active string
-		files        []string
-	}{
-		{"profile", ".profile", []string{".profile"}},
-		{"bash login", ".bash_login", []string{".bash_login", ".profile"}},
-		{"bash profile", ".bash_profile", []string{".bash_profile", ".bash_login", ".profile"}},
-		{"no login file", ".bash_profile", nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			launcher := filepath.Join(home, "O'Brien", "é", "bin", "pipkin")
-			for _, name := range tc.files {
-				if err := os.WriteFile(filepath.Join(home, name), []byte("export PIPKIN_TEST_LOGIN="+name+"\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			// Only these subprocesses receive the temporary HOME. Go's own home
-			// and build caches remain unchanged, and no user profile is sourced.
-			run := func(login bool, script string) string {
-				t.Helper()
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				args := []string{"--noprofile", "--norc", "-c", script}
-				if login {
-					args = []string{"--login", "-c", script}
-				}
-				command := exec.CommandContext(ctx, "/bin/bash", args...)
-				command.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "BASH_ENV=/dev/null", "ENV=/dev/null", "LC_ALL=C"}
-				data, err := command.CombinedOutput()
-				if err != nil {
-					t.Fatalf("temporary-home shell failed: %v: %s", err, data)
-				}
-				return string(data)
-			}
-			sentinel := `printf '%s' "${PIPKIN_TEST_LOGIN:-missing}"`
-			before := run(true, sentinel)
-			want := tc.active
-			if len(tc.files) == 0 {
-				want = "missing"
-			}
-			if before != want {
-				t.Fatalf("login fixture loaded %q, want %q", before, want)
-			}
-			hint := installPersistentPathFix("darwin", "/bin/bash", home, "", launcher, false)
-			if hint == "" || !strings.HasSuffix(hint, " >> "+shellQuote(filepath.Join(home, tc.active))) {
-				t.Fatalf("hint did not select the active login file: %q", hint)
-			}
-			run(false, hint)
-			if after := run(true, sentinel); after != before {
-				t.Fatalf("persistent hint hid existing settings: before=%q after=%q", before, after)
-			}
-			if path := run(true, `printf '%s' "$PATH"`); !strings.HasPrefix(path, filepath.Dir(launcher)+":") {
-				t.Fatalf("login shell did not load the PATH addition: %q", path)
-			}
-			for _, name := range tc.files {
-				if name == tc.active {
-					continue
-				}
-				if data, err := os.ReadFile(filepath.Join(home, name)); err != nil || string(data) != "export PIPKIN_TEST_LOGIN="+name+"\n" {
-					t.Fatal("hint changed an inactive login file")
-				}
-			}
-			for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
-				if name == tc.active {
-					break
-				}
-				if _, err := os.Lstat(filepath.Join(home, name)); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("hint created a higher-priority login file")
-				}
-			}
-		})
-	}
-}
-
-func TestPersistentPATHHintWithholdsUnverifiableBashLoginFile(t *testing.T) {
-	t.Run("non-file", func(t *testing.T) {
-		home := t.TempDir()
-		if err := os.Mkdir(filepath.Join(home, ".bash_profile"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if hint := installPersistentPathFix("darwin", "/bin/bash", home, "", filepath.Join(home, "pipkin"), false); hint != "" {
-			t.Fatalf("non-file login configuration received an append command: %q", hint)
-		}
-	})
-	t.Run("unreadable", func(t *testing.T) {
-		home := t.TempDir()
-		path := filepath.Join(home, ".bash_profile")
-		if err := os.WriteFile(path, []byte("private fixture"), 0); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-		if file, err := os.Open(path); err == nil {
-			file.Close()
-			t.Skip("runner can read files without read permission")
-		}
-		if hint := installPersistentPathFix("darwin", "/bin/bash", home, "", filepath.Join(home, "pipkin"), false); hint != "" {
-			t.Fatalf("unreadable login configuration received an append command: %q", hint)
-		}
-	})
-	t.Run("dangling symlink", func(t *testing.T) {
-		home := t.TempDir()
-		if err := os.Symlink(filepath.Join(home, "missing"), filepath.Join(home, ".bash_profile")); err != nil {
-			t.Skipf("symlink fixture is unavailable: %v", err)
-		}
-		if hint := installPersistentPathFix("darwin", "/bin/bash", home, "", filepath.Join(home, "pipkin"), false); hint != "" {
-			t.Fatalf("dangling login symlink received an append command: %q", hint)
-		}
-	})
 }
 
 func TestCommandHintsEncodeControlCharactersWithoutChangingThePath(t *testing.T) {

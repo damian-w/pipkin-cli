@@ -152,5 +152,5 @@ func statusJSONTo(out io.Writer) error {
 
 func authorizeCommand() error {
 	return runAuthorize(context.Background(), runtime.GOOS, os.Getenv("PIPKIN_AUTHORIZE_NESTED") == "1", os.Stdout,
-		authorizeDependencies{authorize: authorizeClaudeKeychainWithNotice, running: statusRunningPID, restart: restartCommand})
+		authorizeDependencies{authorize: authorizeClaudeKeychainWithNotice, running: runningPID, restart: restartCommand})
 }

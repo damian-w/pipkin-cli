@@ -7,7 +7,7 @@ import (
 )
 
 func TestClaudeTaskDarwinNativeProcessIdentity(t *testing.T) {
-	identity, err := claudeTaskProcessInfo(os.Getpid())
+	identity, err := ownedProcessInfo(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -168,27 +168,21 @@ func TestCodexTransportWindowsRejectsUnrelatedServer(t *testing.T) {
 
 func TestCodexTransportWindowsNativeReadCancellation(t *testing.T) {
 	name, server, sid := codexTransportTestNamedPipe(t, false)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	conn, err := openCodexNamedPipe(ctx, name, func(handle windows.Handle) error { return validateCodexPipeDACL(handle, sid) })
+	conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error { return validateCodexPipeDACL(handle, sid) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
 	codexTransportConnectTestServer(t, server)
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		t.Fatal(err)
-	}
 	done := make(chan error, 1)
 	go func() { _, err := conn.Read(make([]byte, 1)); done <- err }()
-	cancel()
+	conn.Close()
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Fatal("cancelled named pipe read succeeded")
+			t.Fatal("closed named pipe read succeeded")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("native named pipe read ignored cancellation")
+		t.Fatal("native named pipe read ignored close")
 	}
 }
 

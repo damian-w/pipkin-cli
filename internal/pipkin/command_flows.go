@@ -31,7 +31,6 @@ type installCommandDeps struct {
 	authorize          func(io.Writer, io.Writer)
 	hint               func(...string) string
 	pathFix            string
-	persistentPathFix  string
 	permissionHint     func() string
 }
 
@@ -115,43 +114,25 @@ func runInstallCommand(out io.Writer, deps installCommandDeps) error {
 	if _, err := deps.activate(staged, actions); err != nil {
 		return installationConfigError(commandPhaseError{message: "Couldn't finish installing Pipkin.", cause: err}, backup)
 	}
-	if _, err := fmt.Fprintf(out, "Pipkin %s is installed and running.\nIt starts automatically when you log in.\n", deps.buildVersion); err != nil {
-		return err
-	}
+	lines := lineOutput{w: out}
+	lines.printf("Pipkin %s is installed and running.\nIt starts automatically when you log in.\n", deps.buildVersion)
 	if backup != "" {
-		if _, err := fmt.Fprintf(out, "Pipkin's settings were damaged, so they were reset. The old file is at %s.\n", terminalText(backup)); err != nil {
-			return err
-		}
+		lines.printf("Pipkin's settings were damaged, so they were reset. The old file is at %s.\n", terminalText(backup))
 	}
-	if _, err := io.Copy(out, &authorization); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "\nNext: %s\n", deps.hint("status")); err != nil {
-		return err
-	}
+	lines.printf("%s", authorization.String())
+	lines.printf("\nNext: %s\n", deps.hint("status"))
 	if deps.pathFix != "" {
-		if _, err := fmt.Fprintf(out, "To use 'pipkin' in this terminal (zsh or bash), paste:\n  %s\n", deps.pathFix); err != nil {
-			return err
-		}
-		if deps.persistentPathFix != "" {
-			if _, err := fmt.Fprintf(out, "For future terminals (optional), paste:\n  %s\n", deps.persistentPathFix); err != nil {
-				return err
-			}
-		}
+		lines.printf("To use 'pipkin' in this terminal (zsh or bash), paste:\n  %s\n", deps.pathFix)
 	} else if deps.goos == "windows" {
-		if _, err := fmt.Fprintln(out, "Open a new terminal to use the short 'pipkin' command."); err != nil {
-			return err
-		}
+		lines.printf("Open a new terminal to use the short 'pipkin' command.\n")
 	}
 	if deps.goos == "windows" && staged.missingCompanion {
-		if _, err := fmt.Fprintln(out, "The windowless app was unavailable; automatic startup uses the console app."); err != nil {
-			return err
-		}
+		lines.printf("The windowless app was unavailable; automatic startup uses the console app.\n")
 	}
 	if hint := deps.permissionHint(); hint != "" {
-		_, err = fmt.Fprintln(out, terminalText(hint))
+		lines.printf("%s\n", terminalText(hint))
 	}
-	return err
+	return lines.err
 }
 
 func installationConfigError(err error, backup string) error {
@@ -202,11 +183,10 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 	if _, err := deps.activate(staged, actions); err != nil {
 		return commandPhaseError{message: "Couldn't finish updating Pipkin.", cause: err}
 	}
-	if _, err := fmt.Fprintf(out, "Pipkin %s is updated and running.\n", strings.TrimPrefix(tag, "v")); err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, &authorization); err != nil {
-		return err
+	lines := lineOutput{w: out}
+	lines.printf("Pipkin %s is updated and running.\n%s", strings.TrimPrefix(tag, "v"), authorization.String())
+	if lines.err != nil {
+		return lines.err
 	}
 	// Firmware advice is optional and never fails an update.
 	_ = deps.advisory(out)
@@ -300,120 +280,6 @@ func installPathFix(goos, launcher string, onPATH bool) string {
 		return ""
 	}
 	return "export PATH=" + shellQuote(filepath.Dir(launcher)) + `:"$PATH"`
-}
-
-func installPersistentPathFix(goos, shell, home, zDotDir, launcher string, onPATH bool) string {
-	if goos == "windows" || onPATH || !filepath.IsAbs(home) {
-		return ""
-	}
-	var startup string
-	switch filepath.Base(shell) {
-	case "zsh":
-		folder := home
-		if zDotDir != "" {
-			if !filepath.IsAbs(zDotDir) {
-				return ""
-			}
-			folder = zDotDir
-		}
-		startup = filepath.Join(folder, ".zshrc")
-	case "bash":
-		startup = filepath.Join(home, ".bashrc")
-		if goos == "darwin" {
-			startup = bashLoginStartupFile(home)
-			if startup == "" {
-				return ""
-			}
-		}
-	default:
-		return ""
-	}
-	line := installPathFix(goos, launcher, false)
-	return `printf '\n%s\n' ` + shellQuote(line) + " >> " + shellQuote(startup)
-}
-
-func bashLoginStartupFile(home string) string {
-	// Bash reads only the first login file it finds, so never shadow one.
-	for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
-		path := filepath.Join(home, name)
-		info, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return ""
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			info, err = os.Stat(path)
-			if err != nil {
-				return ""
-			}
-		}
-		if !info.Mode().IsRegular() {
-			return ""
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return ""
-		}
-		if err := file.Close(); err != nil {
-			return ""
-		}
-		return path
-	}
-	return filepath.Join(home, ".bash_profile")
-}
-
-// authorizeNoticeWriter passes only the permission notice through from the child.
-type authorizeNoticeWriter struct {
-	out       io.Writer
-	notice    []byte
-	prefix    []int
-	matched   int
-	forwarded bool
-}
-
-func newAuthorizeNoticeWriter(out io.Writer) *authorizeNoticeWriter {
-	var rendered bytes.Buffer
-	_ = writeOutputLine(&rendered, "", authorizePromptNotice)
-	notice := rendered.Bytes()
-	prefix := make([]int, len(notice))
-	for i, j := 1, 0; i < len(notice); i++ {
-		for j > 0 && notice[i] != notice[j] {
-			j = prefix[j-1]
-		}
-		if notice[i] == notice[j] {
-			j++
-		}
-		prefix[i] = j
-	}
-	return &authorizeNoticeWriter{out: out, notice: notice, prefix: prefix}
-}
-
-func (w *authorizeNoticeWriter) Write(data []byte) (int, error) {
-	if w.forwarded {
-		return len(data), nil
-	}
-	for i, b := range data {
-		for w.matched > 0 && b != w.notice[w.matched] {
-			w.matched = w.prefix[w.matched-1]
-		}
-		if b == w.notice[w.matched] {
-			w.matched++
-		}
-		if w.matched == len(w.notice) {
-			w.forwarded = true
-			n, err := w.out.Write(w.notice)
-			if err == nil && n != len(w.notice) {
-				err = io.ErrShortWrite
-			}
-			if err != nil {
-				return i + 1, err
-			}
-			break
-		}
-	}
-	return len(data), nil
 }
 
 func latestFirmwareAdvisoryTag(ctx context.Context) (string, error) {

@@ -7,7 +7,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func claudeTaskProcessInfo(pid int) (processIdentity, error) {
+func ownedProcessInfo(pid int) (processIdentity, error) {
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
 		return processIdentity{}, err
@@ -24,7 +24,7 @@ func claudeTaskProcessInfo(pid int) (processIdentity, error) {
 	}
 	current, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil || !windows.EqualSid(owner.User.Sid, current.User.Sid) {
-		return processIdentity{}, errors.New("Claude task process owner is unavailable")
+		return processIdentity{}, errors.New("process owner is unavailable")
 	}
 	var created, exited, kernel, user windows.Filetime
 	if err := windows.GetProcessTimes(process, &created, &exited, &kernel, &user); err != nil {

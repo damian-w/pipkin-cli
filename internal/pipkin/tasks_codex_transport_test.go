@@ -1,13 +1,9 @@
 package pipkin
 
 import (
-	"context"
-	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestCodexTransportHome(t *testing.T) {
@@ -46,61 +42,6 @@ func TestCodexTransportGUIExecutable(t *testing.T) {
 		if got := codexGUIExecutable(c.path, c.goos); got != c.want {
 			t.Errorf("GUI identity %q (%s): %t, want %t", c.path, c.goos, got, c.want)
 		}
-	}
-}
-
-func TestCodexTransportCancellationSurvivesClearedDeadline(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	conn, err := boundCodexIPCConn(ctx, client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { _, err := conn.Read(make([]byte, 1)); done <- err }()
-	cancel()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("cancelled read succeeded")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancelled IPC read remained blocked")
-	}
-}
-
-func TestCodexTransportExpiredContextClosesConnection(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if conn, err := boundCodexIPCConn(ctx, client); !errors.Is(err, context.Canceled) || conn != nil {
-		t.Fatalf("cancelled connection: %v, %v", conn, err)
-	}
-	if _, err := server.Write([]byte{1}); err == nil {
-		t.Fatal("cancelled connection was not closed")
-	}
-}
-
-func TestCodexTransportDeadline(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	conn, err := boundCodexIPCConn(ctx, client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	started := time.Now()
-	_, err = conn.Read(make([]byte, 1))
-	if err == nil || time.Since(started) > time.Second {
-		t.Fatalf("deadline read: %v after %v", err, time.Since(started))
 	}
 }
 

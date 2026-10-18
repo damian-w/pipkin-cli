@@ -52,18 +52,26 @@ func outputASCII(value string) string {
 	}, value)
 }
 
-type providerOutput struct {
+// lineOutput keeps the first write error so callers can check it once.
+type lineOutput struct {
 	w   io.Writer
 	err error
 }
 
-func (out *providerOutput) line(prefix, text string) {
+func (out *lineOutput) line(prefix, text string) {
 	if out.err == nil {
 		out.err = writeOutputLine(out.w, prefix, text)
 	}
 }
 
-func (out *providerOutput) row(label, value string, width int) {
+// printf writes text unwrapped, for commands that must stay on one line.
+func (out *lineOutput) printf(format string, args ...any) {
+	if out.err == nil {
+		_, out.err = fmt.Fprintf(out.w, format, args...)
+	}
+}
+
+func (out *lineOutput) row(label, value string, width int) {
 	label = strings.TrimSpace(outputASCII(label))
 	if len(label) > width {
 		out.line("  ", label)
@@ -75,7 +83,7 @@ func (out *providerOutput) row(label, value string, width int) {
 
 // writeProviders renders allowance rows for both status and usage.
 func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
-	out := providerOutput{w: w}
+	out := lineOutput{w: w}
 	for index, provider := range []struct{ key, name string }{{"codex", "Codex"}, {"claude", "Claude"}} {
 		if index > 0 {
 			out.line("", "")

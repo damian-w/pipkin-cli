@@ -44,9 +44,7 @@ func openCodexUnixIPC(ctx context.Context, path string, validate func(*net.UnixC
 	if !codexUnixSocketPathSafe(path) {
 		return nil, errors.New("Codex local socket is unavailable or unsafe")
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, codexIPCTransportLimit)
-	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(dialCtx, "unix", path)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
 	if err != nil {
 		return nil, errors.New("Codex local connection is unavailable")
 	}
@@ -55,7 +53,7 @@ func openCodexUnixIPC(ctx context.Context, path string, validate func(*net.UnixC
 		conn.Close()
 		return nil, errors.New("Codex local peer could not be verified")
 	}
-	return boundCodexIPCConn(ctx, conn)
+	return conn, nil
 }
 
 func validateCodexUnixPeer(conn *net.UnixConn) error {
@@ -80,7 +78,7 @@ func validateCodexUnixPeer(conn *net.UnixConn) error {
 	if credentialErr != nil || peerPID <= 0 || peerUID != uint32(os.Getuid()) {
 		return errors.New("unexpected Codex local peer")
 	}
-	info, err := claudeTaskProcessInfo(peerPID)
+	info, err := ownedProcessInfo(peerPID)
 	if err != nil || !codexGUIExecutable(info.Executable, "darwin") {
 		return errors.New("Codex GUI process could not be verified")
 	}

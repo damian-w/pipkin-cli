@@ -106,13 +106,13 @@ func TestTaskOutputReportsWriterErrors(t *testing.T) {
 func TestTaskCacheFreshnessDoesNotInventZeroOrMutateSnapshot(t *testing.T) {
 	now := time.Unix(1800000000, 0)
 	s := &TaskSnapshot{SchemaVersion: 1, ObservedAt: now.Unix(), Providers: map[string]TaskProvider{"codex": {Coverage: "partial", Tasks: []Task{{ID: "test", Status: "working"}}}}}
-	if readableTaskSnapshot(s, true, now) != s {
+	if readableTaskSnapshot(s, true, now) != s || readableTaskSnapshot(s, true, now.Add(taskFreshFor-time.Second)) != s {
 		t.Fatal("fresh cache was discarded")
 	}
 	for _, current := range []struct {
 		running bool
 		now     time.Time
-	}{{false, now}, {true, now.Add(time.Minute)}, {true, now.Add(-time.Second)}} {
+	}{{false, now}, {true, now.Add(taskFreshFor)}, {true, now.Add(-time.Second)}} {
 		p := readableTaskSnapshot(s, current.running, current.now).Providers["codex"]
 		if p.Coverage != "unavailable" || p.Tasks != nil {
 			t.Fatalf("stale or stopped cache looked live: %#v", p)

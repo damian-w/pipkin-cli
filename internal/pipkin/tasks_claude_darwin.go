@@ -17,7 +17,7 @@ var claudeTaskDarwinNative struct {
 	err  error
 }
 
-func claudeTaskProcessInfo(pid int) (processIdentity, error) {
+func ownedProcessInfo(pid int) (processIdentity, error) {
 	claudeTaskDarwinNative.Do(func() {
 		library, err := purego.Dlopen("/usr/lib/libproc.dylib", purego.RTLD_NOW|purego.RTLD_LOCAL)
 		if err != nil {

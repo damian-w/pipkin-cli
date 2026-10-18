@@ -131,8 +131,8 @@ The helper refreshes tasks about every 30 seconds while awake and saves them as
 `tasks` in the status snapshot. It is omitted before the first check and by
 older helpers. Sleep and wake discard earlier results. `status --json` reports
 every provider as `unavailable` with `tasks: null` when the helper is stopped or
-the check is more than 37 seconds old or in the future, keeping the original
-`observed_at`.
+the check is 45 seconds old or more, or in the future, keeping the original
+`observed_at`. The display uses the same 45-second limit.
 
 `pipkin tasks` never updates the cache or the display. The helper sends each
 fresh check to a display that reports protocol 2, with only each provider's

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -96,7 +95,7 @@ func collectClaudeTasks(ctx context.Context) TaskProvider {
 		goos: runtime.GOOS, hostname: hostname,
 		registryDirs: []string{filepath.Join(claudeConfig(), "sessions")},
 		desktopDirs:  claudeTaskDesktopDirs(ctx, runtime.GOOS, homeDir()),
-		inspect:      claudeTaskProcessInfo,
+		inspect:      ownedProcessInfo,
 	}
 	return collectClaudeTasksWith(ctx, deps)
 }
@@ -155,7 +154,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 			}
 		}
 	}
-	byID := make(map[string]Task)
+	var tasks []Task
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return unavailable
@@ -235,27 +234,12 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 				}
 			}
 		}
-		if task.ID == "" {
-			continue
-		}
-		if previous, ok := byID[task.ID]; ok {
-			if previous.Status != task.Status {
-				task.Status, task.UpdatedAt = "unknown", nil
-			} else if previous.UpdatedAt != nil && (task.UpdatedAt == nil || *previous.UpdatedAt > *task.UpdatedAt) {
-				task.UpdatedAt = previous.UpdatedAt
-			}
-		}
-		byID[task.ID] = task
-	}
-	if ctx.Err() != nil || len(byID) == 0 {
-		return unavailable
-	}
-	tasks := make([]Task, 0, len(byID))
-	for _, task := range byID {
 		tasks = append(tasks, task)
 	}
-	slices.SortFunc(tasks, func(a, b Task) int { return strings.Compare(a.ID, b.ID) })
-	return TaskProvider{Coverage: "partial", Tasks: tasks}
+	if ctx.Err() != nil {
+		return unavailable
+	}
+	return normalizeTaskProvider(TaskProvider{Coverage: "partial", Tasks: tasks})
 }
 
 func claudeTaskHostID(id string) bool {

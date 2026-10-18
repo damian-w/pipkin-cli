@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -295,9 +296,6 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		return err
 	}
 	session.port = port
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if err := writeOutputLine(output, "", "Checking the firmware release..."); err != nil {
 		return err
 	}
@@ -306,9 +304,6 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		return fmt.Errorf("firmware release check failed: %w", err)
 	}
 	defer release.close()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	selectedVersion = release.Manifest.Version
 	// Reject invalid injected or stale metadata before preparing the flasher too.
 	if err := validateFirmwareManifest(release.Manifest, release.Tag, version); err != nil {
@@ -318,14 +313,8 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return fmt.Errorf("could not prepare the firmware flasher: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	identity, err := session.claimPort(ctx)
 	if err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := validateFlashIdentity(identity, release.Manifest); err != nil {
@@ -348,16 +337,10 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := writeOutputLine(output, "", "Checking your display. The screen may go blank for a moment."); err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	session.reset = tool.Reset // ROM probing can reset even when it fails midway.
 	probe, err := tool.Probe(ctx, port)
 	if err != nil {
 		return fmt.Errorf("could not check the ESP32 bootloader (close other serial tools, or hold BOOT while connecting): %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	if err := validateFlashProbe(probe, release.Manifest); err != nil {
 		return err
@@ -387,9 +370,6 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return fmt.Errorf("could not check the existing partition layout: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	updating := identity != nil
 	stored := false
 	if !updating {
@@ -399,9 +379,6 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		prefix, err := tool.Read(ctx, port, applicationOffset, 1024)
 		if err != nil {
 			return fmt.Errorf("could not inspect existing firmware: %w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return err
 		}
 		var storedVersion string
 		storedVersion, updating = readPipkinFirmwareVersion(prefix)
@@ -448,16 +425,10 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if !confirmed {
 		return writeOutputLine(output, "", "Cancelled. No firmware was written.")
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	// A user can unplug or exchange boards while deciding. Recheck the physical
 	// device before the first write, rather than trusting its serial-port pathname.
 	confirmedProbe, err := tool.Probe(ctx, port)
 	if err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := validateFlashProbe(confirmedProbe, release.Manifest); err != nil {
@@ -575,4 +546,121 @@ func confirmFlashPrompt(ctx context.Context, input io.Reader, output io.Writer, 
 			return false, nil
 		}
 	}
+}
+
+// flashOutput serializes the Ctrl-C notice with tool output and remembers the
+// first write failure without interrupting the board.
+type flashOutput struct {
+	mu  sync.Mutex
+	w   io.Writer
+	err error
+}
+
+func (out *flashOutput) Write(data []byte) (int, error) {
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	if out.err != nil {
+		return 0, out.err
+	}
+	n, err := out.w.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	out.err = err
+	return n, err
+}
+
+func (out *flashOutput) failure() error {
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	return out.err
+}
+
+func flashCancellationNotice(ctx context.Context, output io.Writer) func() {
+	var once sync.Once
+	notice := func() {
+		once.Do(func() {
+			_ = writeOutputLine(output, "", "Finishing the firmware write. Keep the cable plugged in.")
+		})
+	}
+	stop := context.AfterFunc(ctx, notice)
+	var finishOnce sync.Once
+	return func() {
+		finishOnce.Do(func() {
+			if !stop() || ctx.Err() != nil {
+				// Waits for a notice already being written.
+				notice()
+			}
+		})
+	}
+}
+
+type flashPlan struct {
+	action, installed, selected string
+	port, boardName, profile    string
+	stored                      bool
+	firmwareProfiles            int
+}
+
+func writeFlashPlan(output io.Writer, plan flashPlan) (string, error) {
+	var heading, prompt string
+	switch plan.action {
+	case "Update", "Downgrade":
+		heading = fmt.Sprintf("Ready to %s your display from Pipkin %s to %s.", strings.ToLower(plan.action), plan.installed, plan.selected)
+		prompt = plan.action + " now? [y/N] "
+	case "Reinstall":
+		heading = "Ready to reinstall Pipkin " + plan.selected + " on your display."
+		prompt = "Reinstall now? [y/N] "
+	default:
+		heading = "Ready to install Pipkin " + plan.selected + "."
+		prompt = "Confirm this is a CYD and install Pipkin? [y/N] "
+	}
+	lines := lineOutput{w: output}
+	lines.line("", "")
+	lines.line("", heading)
+	if plan.stored {
+		lines.line("", "Current: Pipkin "+plan.installed+" (installed but not responding)")
+	}
+	if plan.action != "Install" {
+		lines.line("", "Your settings are kept.")
+		return prompt, lines.err
+	}
+	board := "CYD, 2.8-inch touch display"
+	if plan.boardName != "" {
+		board = plan.boardName
+	}
+	lines.line("", "Board: "+board)
+	lines.line("", "Port: "+plan.port)
+	lines.line("", "This replaces the board's current firmware and settings.")
+	if plan.profile == "" && plan.firmwareProfiles > 1 {
+		lines.line("", "The physical board profile is unconfirmed. Inspect the PCB and use 'pipkin identify --board PROFILE' to remember it.")
+	}
+	return prompt, lines.err
+}
+
+type flashWriteFailure struct {
+	cause   error
+	written bool
+	command string
+}
+
+func (failure *flashWriteFailure) Unwrap() error { return failure.cause }
+
+func (failure *flashWriteFailure) Error() string {
+	headline := "The firmware write didn't finish."
+	if failure.written {
+		headline = "The firmware was written, but Pipkin couldn't confirm it started."
+	}
+	var text bytes.Buffer
+	lines := lineOutput{w: &text}
+	lines.line("", headline)
+	lines.line("", "The display may stay blank until the firmware is reinstalled.")
+	lines.line("", "")
+	lines.line("", "To fix it:")
+	lines.line("  ", "1. Unplug the display, wait a few seconds, and plug it back in.")
+	lines.line("  ", "2. Run this command:")
+	// Keep the command on one line so it can be pasted.
+	lines.printf("     %s\n\n", failure.command)
+	lines.line("Details: ", failure.cause.Error())
+	return strings.TrimSuffix(text.String(), "\n")
 }

@@ -1,17 +1,11 @@
 package pipkin
 
 import (
-	"context"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 )
-
-const codexIPCTransportLimit = 3 * time.Second
 
 func codexTaskHome() (string, error) {
 	if value, ok := os.LookupEnv("CODEX_HOME"); ok {
@@ -56,39 +50,4 @@ func codexGUIExecutable(executable, goos string) bool {
 	}
 	// Also recognize the per-user unpackaged installer location.
 	return len(parts) >= 4 && parts[len(parts)-3] == "programs" && parts[len(parts)-2] == "codex"
-}
-
-type codexBoundedIPCConn struct {
-	net.Conn
-	stop   func() bool
-	cancel context.CancelFunc
-	once   sync.Once
-	err    error
-}
-
-func boundCodexIPCConn(ctx context.Context, conn net.Conn) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, codexIPCTransportLimit)
-	if err := ctx.Err(); err != nil {
-		cancel()
-		conn.Close()
-		return nil, err
-	}
-	deadline, _ := ctx.Deadline()
-	if err := conn.SetDeadline(deadline); err != nil {
-		cancel()
-		conn.Close()
-		return nil, errors.New("Codex connection deadlines are unavailable")
-	}
-	c := &codexBoundedIPCConn{Conn: conn, cancel: cancel}
-	c.stop = context.AfterFunc(ctx, func() { conn.Close() })
-	return c, nil
-}
-
-func (c *codexBoundedIPCConn) Close() error {
-	c.once.Do(func() {
-		c.stop()
-		c.cancel()
-		c.err = c.Conn.Close()
-	})
-	return c.err
 }

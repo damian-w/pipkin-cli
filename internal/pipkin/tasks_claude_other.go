@@ -4,6 +4,6 @@ package pipkin
 
 import "errors"
 
-func claudeTaskProcessInfo(int) (processIdentity, error) {
+func ownedProcessInfo(int) (processIdentity, error) {
 	return processIdentity{}, errors.New("Claude task collection is unsupported")
 }
