@@ -145,8 +145,7 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 	}
 	tag, err := deps.latest()
 	if err != nil {
-		var network *url.Error
-		if errors.As(err, &network) {
+		if _, ok := errors.AsType[*url.Error](err); ok {
 			return commandPhaseError{message: "Couldn't reach GitHub to check for updates. Check your internet connection.", cause: err, quiet: true}
 		}
 		return commandPhaseError{message: "Couldn't check for Pipkin updates. Try again later.", cause: err}

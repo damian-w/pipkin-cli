@@ -533,8 +533,7 @@ func TestCodexTaskCollectorFrameCapAndCancellation(t *testing.T) {
 	if result.Coverage != "unavailable" || result.Tasks != nil {
 		t.Fatal("oversized frame accepted")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	result = collectCodexTasksWith(ctx, codexTaskOptions{dial: func(context.Context) (net.Conn, error) { t.Fatal("dialed with canceled context"); return nil, nil }})
 	if result.Coverage != "unavailable" {
 		t.Fatal("canceled collection has evidence")

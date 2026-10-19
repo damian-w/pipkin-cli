@@ -2,8 +2,6 @@ package pipkin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,8 +33,7 @@ func newFirmwareHTTPFixture(t *testing.T) *firmwareHTTPFixture {
 			data = testPartitionTable()
 		}
 		image.Size = int64(len(data))
-		digest := sha256.Sum256(data)
-		image.SHA256 = hex.EncodeToString(digest[:])
+		image.SHA256 = sha256Hex(data)
 		f.files[image.File] = data
 	}
 	f.files["firmware.json"], _ = json.Marshal(r.Manifest)
@@ -47,8 +44,7 @@ func newFirmwareHTTPFixture(t *testing.T) *firmwareHTTPFixture {
 			json.NewEncoder(w).Encode(f.metadata)
 			return
 		}
-		if strings.HasPrefix(request.URL.Path, "/download/v2.0.0/") {
-			name := strings.TrimPrefix(request.URL.Path, "/download/v2.0.0/")
+		if name, ok := strings.CutPrefix(request.URL.Path, "/download/v2.0.0/"); ok {
 			if data, ok := f.files[name]; ok {
 				w.Write(data)
 				return
@@ -72,8 +68,7 @@ func (f *firmwareHTTPFixture) refreshChecksums() {
 		if name == "SHA256SUMS" {
 			continue
 		}
-		digest := sha256.Sum256(data)
-		fmt.Fprintf(&sums, "%x  %s\n", digest, name)
+		fmt.Fprintf(&sums, "%s  %s\n", sha256Hex(data), name)
 	}
 	f.files["SHA256SUMS"] = []byte(sums.String())
 }
@@ -163,13 +158,13 @@ func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
 					name = "partition-table.bin"
 					f.files[name][12] ^= 1
 				}
-				digest := sha256.Sum256(f.files[name])
+				digest := sha256Hex(f.files[name])
 				f.alterManifest(func(m map[string]any) {
 					for _, image := range m["images"].([]any) {
 						i := image.(map[string]any)
 						if i["file"] == name {
 							i["size"] = len(f.files[name])
-							i["sha256"] = hex.EncodeToString(digest[:])
+							i["sha256"] = digest
 						}
 					}
 				})
@@ -241,8 +236,7 @@ func TestFirmwareReleaseExplicitStableVersionAndCancellation(t *testing.T) {
 	if f.requests[0] != "/releases/tags/v2.0.0" {
 		t.Fatal("explicit version used latest endpoint", f.requests)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	if _, err := f.source.stage(ctx, "", t.TempDir(), false); err == nil {
 		t.Fatal("cancelled firmware request succeeded")
 	}

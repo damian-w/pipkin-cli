@@ -2,8 +2,6 @@ package pipkin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -43,8 +41,7 @@ type TaskSnapshot struct {
 }
 
 func taskOpaqueID(provider, rawID string) string {
-	digest := sha256.Sum256([]byte(provider + "\x00" + rawID))
-	return provider + ":" + hex.EncodeToString(digest[:16])
+	return provider + ":" + sha256Hex([]byte(provider + "\x00" + rawID))[:32]
 }
 
 type taskCollectors map[string]func(context.Context) TaskProvider

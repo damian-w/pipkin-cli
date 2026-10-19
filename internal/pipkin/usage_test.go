@@ -298,8 +298,7 @@ func TestUsageRunFailuresDoNotChangeCollectionOrHideWriterErrors(t *testing.T) {
 			t.Fatalf("output failure was hidden: %v", err)
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	before := collections.Load()
 	if err := runUsage(ctx, true, io.Discard, io.Discard, deps); !errors.Is(err, context.Canceled) || collections.Load() != before {
 		t.Fatal("cancelled command started collection")

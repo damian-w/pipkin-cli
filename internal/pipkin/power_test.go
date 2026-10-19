@@ -211,8 +211,7 @@ func TestResumeReobservesQueuedFailuresAndPreservesRetryAfter(t *testing.T) {
 			h.results <- providerResult{provider: "codex", generation: 0, err: failure}
 			h.pollProviders(cancelledContext(), h.now())
 			want := h.now()
-			var retry *usageRetryError
-			if errors.As(failure, &retry) {
+			if retry, ok := errors.AsType[*usageRetryError](failure); ok {
 				want = retry.RetryAt
 			}
 			if !h.due["codex"].Equal(want) {

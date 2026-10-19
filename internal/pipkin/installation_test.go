@@ -2,9 +2,9 @@ package pipkin
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,7 +104,7 @@ func TestDownloadRejectsOversizedBodies(t *testing.T) {
 }
 
 func TestChecksumManifestRejectsAmbiguity(t *testing.T) {
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte("binary")))
+	digest := sha256Hex([]byte("binary"))
 	sums, err := parseChecksums([]byte(strings.ToUpper(digest) + " *pipkin\r\n"))
 	if err != nil || sums["pipkin"] != digest {
 		t.Fatalf("checksums = %v, %v", sums, err)
@@ -121,7 +121,7 @@ func TestReleasePreparationVerifiesWholeSet(t *testing.T) {
 		t.Run(fmt.Sprintf("corrupt=%v", corrupt), func(t *testing.T) {
 			manifest := binaryManifest("windows", "arm64")
 			data := []byte("new release executable")
-			digest := fmt.Sprintf("%x", sha256.Sum256(data))
+			digest := sha256Hex(data)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/SHA256SUMS" {
 					for _, artifact := range manifest {
@@ -317,13 +317,7 @@ func TestInstalledExecutableCanBeStaged(t *testing.T) {
 	}
 	defer input.Close()
 	path := filepath.Join(t.TempDir(), executableName("pipkin"))
-	output, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
-	if err != nil {
-		t.Fatal(err)
-	}
-	copyErr := copyBounded(output, input, maxBinaryBytes)
-	closeErr := output.Close()
-	if err := errors.Join(copyErr, closeErr); err != nil {
+	if err := writeStagedFile(path, 0o755, func(w io.Writer) error { return copyBounded(w, input, maxBinaryBytes) }); err != nil {
 		t.Fatal(err)
 	}
 	child := exec.Command(path, "-test.run=^TestInstalledExecutableCanBeStaged$")
@@ -372,7 +366,7 @@ func TestUpgradePreservesOnlyRecoveryCopy(t *testing.T) {
 func TestIncompleteManifestAvoidsBinaryDownloads(t *testing.T) {
 	var requests atomic.Int32
 	manifest := binaryManifest("windows", "amd64")
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte("binary")))
+	digest := sha256Hex([]byte("binary"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/SHA256SUMS" {
 			fmt.Fprintf(w, "%s  %s\n", digest, manifest[0].asset)

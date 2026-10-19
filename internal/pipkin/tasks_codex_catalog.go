@@ -3,7 +3,6 @@ package pipkin
 import (
 	"context"
 	"database/sql"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,12 +40,7 @@ func codexTaskCandidates(ctx context.Context, home string, limit int) []string {
 		if i >= 4 || ctx.Err() != nil || len(result) >= limit {
 			break
 		}
-		path := filepath.ToSlash(filepath.Join(home, catalog.name))
-		if len(path) > 1 && path[1] == ':' {
-			path = "/" + path
-		}
-		address := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(100)&_pragma=query_only(1)"}
-		db, err := sql.Open("sqlite", address.String())
+		db, err := openSQLiteReadOnly(filepath.Join(home, catalog.name), "mode=ro&_pragma=busy_timeout(100)&_pragma=query_only(1)")
 		if err != nil {
 			continue
 		}

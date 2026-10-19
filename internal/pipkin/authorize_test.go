@@ -65,9 +65,7 @@ func TestAuthorizeFailuresKeepCauseAndAvoidRestart(t *testing.T) {
 		case "restart":
 			deps.restart = func() error { calls++; return want }
 		case "cancelled":
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(ctx)
-			cancel()
+			ctx = cancelledContext()
 			expected = context.Canceled
 		}
 		if err := runAuthorize(ctx, "darwin", false, out, deps); !errors.Is(err, expected) {

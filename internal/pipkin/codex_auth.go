@@ -2,7 +2,6 @@ package pipkin
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -93,8 +92,7 @@ func codexStoreKey(home string) string {
 			}
 		}
 	}
-	sum := sha256.Sum256([]byte(home))
-	return "cli|" + hex.EncodeToString(sum[:8])
+	return "cli|" + sha256Hex([]byte(home))[:16]
 }
 
 func parseCodexAuth(data []byte) (codexAuth, error) {

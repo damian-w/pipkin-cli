@@ -171,8 +171,7 @@ func dispatch(args []string, buildVersion string, commands []cliCommand, output 
 	} else if len(options) != 0 {
 		err = invalidCLIOption(options[0])
 	}
-	var optionErr *cliOptionError
-	if errors.As(err, &optionErr) {
+	if optionErr, ok := errors.AsType[*cliOptionError](err); ok {
 		return 1, fmt.Errorf("%s for 'pipkin %s'\nUsage: %s", optionErr.Error(), command.name, command.syntax)
 	} else if errors.Is(err, errUsage) {
 		return 1, fmt.Errorf("usage: %s", command.syntax)

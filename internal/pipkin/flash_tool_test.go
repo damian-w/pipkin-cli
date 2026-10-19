@@ -143,8 +143,7 @@ func testToolArchive(t *testing.T, platform, suffix string, files map[string][]b
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash := sha256.Sum256(data)
-	return filename, flashToolAsset{Platform: platform, Archive: "tool" + suffix, SHA256: hex.EncodeToString(hash[:])}
+	return filename, flashToolAsset{Platform: platform, Archive: "tool" + suffix, SHA256: sha256Hex(data)}
 }
 
 func TestFlashToolArchiveExtraction(t *testing.T) {
@@ -260,7 +259,6 @@ func TestFlashToolArchiveRejectsLinksDuplicatesAndOversize(t *testing.T) {
 
 func TestFlashToolDownloadVerifiesBeforeInstalling(t *testing.T) {
 	payload := []byte("official archive fixture")
-	hash := sha256.Sum256(payload)
 	for _, corrupt := range []bool{false, true} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if corrupt {
@@ -270,7 +268,7 @@ func TestFlashToolDownloadVerifiesBeforeInstalling(t *testing.T) {
 			}
 		}))
 		destination := filepath.Join(t.TempDir(), "tool.tar.gz")
-		err := downloadToolArchive(context.Background(), server.Client(), server.URL, destination, hex.EncodeToString(hash[:]))
+		err := downloadToolArchive(context.Background(), server.Client(), server.URL, destination, sha256Hex(payload))
 		server.Close()
 		if corrupt {
 			if err == nil {

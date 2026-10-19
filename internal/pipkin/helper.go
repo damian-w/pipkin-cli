@@ -364,8 +364,7 @@ func (h *Helper) pollProviders(ctx context.Context, now time.Time) {
 			delete(h.cooldown, result.provider)
 			if result.err != nil {
 				h.due[result.provider] = now.Add(15 * time.Minute)
-				var retry *usageRetryError
-				if errors.As(result.err, &retry) {
+				if retry, ok := errors.AsType[*usageRetryError](result.err); ok {
 					h.cooldown[result.provider] = retry.RetryAt
 				}
 				if errors.As(result.err, new(offlineError)) {

@@ -3,8 +3,6 @@ package pipkin
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,7 +157,7 @@ func (s firmwareSource) get(ctx context.Context, url string, limit int64) ([]byt
 	request.Header.Set("User-Agent", "pipkin/"+version)
 	var data bytes.Buffer
 	err = download(s.client, request, &data, limit)
-	if status := (*httpStatusError)(nil); errors.As(err, &status) {
+	if status, ok := errors.AsType[*httpStatusError](err); ok {
 		if status.Code == http.StatusNotFound {
 			return nil, errors.New("no published firmware release or required release asset found")
 		}
@@ -347,9 +345,4 @@ func stableVersionNumbers(text string) ([3]uint64, bool) {
 		result[i] = n
 	}
 	return result, true
-}
-
-func sha256Hex(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
 }

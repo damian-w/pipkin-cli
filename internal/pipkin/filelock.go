@@ -40,12 +40,20 @@ func waitFileLock(ctx context.Context, path string) (*os.File, error) {
 		if !errors.Is(err, errLockBusy) {
 			return file, err
 		}
-		timer := time.NewTimer(25 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
+		if err := sleepContext(ctx, 25*time.Millisecond); err != nil {
+			return nil, err
 		}
+	}
+}
+
+// sleepContext waits for d, returning early with the context's error.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }

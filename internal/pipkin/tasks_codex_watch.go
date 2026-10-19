@@ -58,13 +58,8 @@ func (w *codexTaskWatch) run(ctx context.Context, opts codexTaskOptions, changed
 		if time.Since(started) >= time.Minute {
 			failures = 0
 		}
-		timer := time.NewTimer(retry[min(failures, limit)])
+		sleepContext(ctx, retry[min(failures, limit)])
 		failures++
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-		case <-timer.C:
-		}
 	}
 }
 

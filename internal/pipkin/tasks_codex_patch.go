@@ -31,7 +31,7 @@ func codexTaskItemPatch(meta *codexTaskMeta, rest []any, patch codexTaskPatch) b
 			items = append(items, item)
 		}
 		for _, item := range items {
-			if len(item.Questions) > 0 && !bytes.Equal(item.Questions, []byte("null")) ||
+			if jsonPresent(item.Questions) ||
 				item.Type == "userInputResponse" {
 				return true
 			}

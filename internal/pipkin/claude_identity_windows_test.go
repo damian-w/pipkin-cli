@@ -53,11 +53,7 @@ func claudeIdentityTestConfig(t *testing.T, account, token string, orgs ...strin
 
 func writeClaudeIdentityTestConfig(t *testing.T, dir string, config claudeDesktopConfig) {
 	t.Helper()
-	encoded, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), encoded, 0600); err != nil {
+	if err := writeJSON(filepath.Join(dir, "config.json"), config); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -309,8 +309,7 @@ func TestClaudeDesktopOrgStrictCookieFailures(t *testing.T) {
 	t.Run("canceled context", func(t *testing.T) {
 		dir := t.TempDir()
 		writeClaudeOrgTestCookies(t, filepath.Join(dir, "Cookies"), claudeOrgTestCookie{host: ".claude.ai", value: claudeOrgTestSecond, updated: 1})
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
+		ctx := cancelledContext()
 		if org, err := resolveClaudeDesktopOrg(ctx, dir, claudeOrgTestDecrypt, cache, nil, claudeOrgTestAccount, true); !errors.Is(err, context.Canceled) || org != "" {
 			t.Fatalf("cancellation allowed cache fallback: org=%q err=%v", org, err)
 		}

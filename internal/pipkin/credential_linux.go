@@ -99,14 +99,11 @@ func secretServiceError(ctx context.Context, err error) error {
 	if errors.Is(err, fs.ErrPermission) {
 		return errCredentialLocked
 	}
-	var busError dbus.Error
-	var busErrorPointer *dbus.Error
 	var name string
-	switch {
-	case errors.As(err, &busError):
+	if busError, ok := errors.AsType[dbus.Error](err); ok {
 		name = busError.Name
-	case errors.As(err, &busErrorPointer):
-		name = busErrorPointer.Name
+	} else if busError, ok := errors.AsType[*dbus.Error](err); ok {
+		name = busError.Name
 	}
 	switch name {
 	case "org.freedesktop.Secret.Error.IsLocked", "org.freedesktop.DBus.Error.AccessDenied", "org.freedesktop.DBus.Error.AuthFailed", "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired":

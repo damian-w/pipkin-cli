@@ -54,12 +54,8 @@ func startLogindPowerMonitor(ctx context.Context, events chan<- powerEvent, conn
 				logf("host power monitor unavailable; retrying: %v", err)
 				reported = true
 			}
-			timer := time.NewTimer(retry)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
+			if sleepContext(ctx, retry) != nil {
 				return
-			case <-timer.C:
 			}
 		}
 	}()

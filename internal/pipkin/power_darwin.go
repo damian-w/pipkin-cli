@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
@@ -134,16 +133,9 @@ func loadDarwinPowerAPI() (*darwinPowerAPI, error) {
 				purego.RegisterFunc(destination, address)
 			}
 		}
-		constant := func(library uintptr, name string) uintptr {
-			address := symbol(library, name)
-			if err != nil {
-				return 0
-			}
-			// The symbol is a framework-owned pointer to a CF/Objective-C object.
-			pointer := *(*unsafe.Pointer)(unsafe.Pointer(&address))
-			value := *(*uintptr)(pointer)
-			if value == 0 {
-				err = fmt.Errorf("empty native constant %s", name)
+		constant := func(library uintptr, name string) (value uintptr) {
+			if err == nil {
+				value, err = darwinConstant(library, name)
 			}
 			return value
 		}

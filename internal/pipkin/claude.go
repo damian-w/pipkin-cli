@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -40,13 +39,13 @@ type claudeDesktopConfig struct {
 	AccountUUID  string          `json:"lastKnownAccountUuid"`
 }
 
-func claudeCachePresent(raw json.RawMessage) bool {
+func jsonPresent(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)
 	return len(raw) > 0 && !bytes.Equal(raw, []byte("null"))
 }
 
 func (config claudeDesktopConfig) signedIn() bool {
-	return claudeCachePresent(config.TokenCacheV2) || claudeCachePresent(config.TokenCache)
+	return jsonPresent(config.TokenCacheV2) || jsonPresent(config.TokenCache)
 }
 
 func readClaudeDesktopConfig(dir string) (claudeDesktopConfig, error) {
@@ -134,8 +133,7 @@ func loadClaudeCredentialFor(ctx context.Context, goos string,
 			return zero, err
 		}
 		desktop, err := loadDesktop(ctx, dir, config)
-		var retry *usageRetryError
-		if err != nil && errors.As(profileErr, &retry) {
+		if _, ok := errors.AsType[*usageRetryError](profileErr); err != nil && ok {
 			return zero, profileErr
 		}
 		return desktop, err
@@ -151,8 +149,7 @@ func loadClaudeCodeCredential(ctx context.Context) (claudeCredential, error) {
 	if runtime.GOOS == "darwin" {
 		service := "Claude Code-credentials"
 		if custom := os.Getenv("CLAUDE_CONFIG_DIR"); custom != "" {
-			sum := sha256.Sum256([]byte(custom))
-			service += "-" + hex.EncodeToString(sum[:])[:8]
+			service += "-" + sha256Hex([]byte(custom))[:8]
 		}
 		if current, err := user.Current(); err == nil {
 			raw, err := readGenericPassword(ctx, service, current.Username)
@@ -206,7 +203,7 @@ func loadClaudeDesktopCredential(ctx context.Context, dir string, config claudeD
 func decodeClaudeDesktopCaches(config claudeDesktopConfig, decrypt func([]byte) ([]byte, error)) ([2]map[string]json.RawMessage, error) {
 	var caches [2]map[string]json.RawMessage
 	for i, raw := range []json.RawMessage{config.TokenCacheV2, config.TokenCache} {
-		if !claudeCachePresent(raw) {
+		if !jsonPresent(raw) {
 			continue
 		}
 		var encoded string
@@ -352,15 +349,20 @@ func claudeActiveOrg(ctx context.Context, dir string, decrypt func([]byte) ([]by
 	return "", errClaudeOrgMissing
 }
 
+// openSQLiteReadOnly opens a SQLite file URI, including Windows drive paths.
+func openSQLiteReadOnly(path, query string) (*sql.DB, error) {
+	path = filepath.ToSlash(path)
+	if len(path) > 1 && path[1] == ':' {
+		path = "/" + path
+	}
+	address := url.URL{Scheme: "file", Path: path, RawQuery: query}
+	return sql.Open("sqlite", address.String())
+}
+
 // queryClaudeOrgCookie reads one cookie database. It returns an org or a fatal
 // error; other failures are recorded so the next database can be tried.
 func queryClaudeOrgCookie(ctx context.Context, path string, decrypt func([]byte) ([]byte, error), record func(error)) (string, error) {
-	uriPath := filepath.ToSlash(path)
-	if len(uriPath) > 1 && uriPath[1] == ':' {
-		uriPath = "/" + uriPath
-	}
-	address := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
-	db, err := sql.Open("sqlite", address.String())
+	db, err := openSQLiteReadOnly(path, "mode=ro")
 	if err != nil {
 		record(errClaudeOrgStorage)
 		return "", nil

@@ -87,11 +87,7 @@ func TestCLIUsageListsCommandsForPlatform(t *testing.T) {
 			for _, command := range commands {
 				text += "\n" + command.syntax + "\n" + command.summary + "\n" + command.details
 			}
-			for _, line := range strings.Split(text, "\n") {
-				if len(line) > outputWidth {
-					t.Fatalf("help wraps: %q", line)
-				}
-			}
+			checkTerminalLines(t, text, false)
 		})
 	}
 }
@@ -178,12 +174,7 @@ func TestCLIRoutesTasksWithoutInstallation(t *testing.T) {
 
 func TestCLIBareCommandShowsStatusAndKeepsHelpMenu(t *testing.T) {
 	t.Setenv("PIPKIN_HOME", t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(installedBinary()), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(installedBinary(), []byte("fixture, never executed"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestBinary(t, installedBinary(), "fixture, never executed")
 	var out bytes.Buffer
 	calls := 0
 	commands := testCommands(t, &out, map[string]func([]string) error{"status": func(args []string) error {

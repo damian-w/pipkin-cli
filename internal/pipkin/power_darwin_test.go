@@ -70,8 +70,7 @@ func TestDarwinSleepAcknowledgmentAfterHelper(t *testing.T) {
 }
 
 func TestDarwinSleepAcknowledgmentOnCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	allowed := false
 	m := &darwinPowerMonitor{ctx: ctx, events: make(chan powerEvent), api: &darwinPowerAPI{allowPowerChange: func(uint32, uintptr) int32 { allowed = true; return 0 }}}
 	m.systemPowerChanged(darwinSystemWillSleep, 1)

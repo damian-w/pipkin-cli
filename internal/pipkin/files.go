@@ -26,26 +26,40 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".pipkin-*")
+	name, err := writeTempFile(filepath.Dir(path), ".pipkin-*", data, false)
 	if err != nil {
 		return err
 	}
-	name := file.Name()
-	_, writeErr := file.Write(data)
-	closeErr := file.Close()
-	if writeErr == nil {
-		writeErr = closeErr
+	err = os.Chmod(name, mode)
+	if err == nil {
+		err = os.Rename(name, path)
 	}
-	if writeErr == nil {
-		writeErr = os.Chmod(name, mode)
-	}
-	if writeErr == nil {
-		writeErr = os.Rename(name, path)
-	}
-	if writeErr != nil {
+	if err != nil {
 		os.Remove(name)
 	}
-	return writeErr
+	return err
+}
+
+// writeTempFile writes data to a new private temporary file and returns its
+// name, removing the file again if any step fails.
+func writeTempFile(dir, pattern string, data []byte, sync bool) (string, error) {
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	_, err = file.Write(data)
+	if err == nil && sync {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	return name, nil
 }
 
 func writeJSON(path string, value any) error {
@@ -97,7 +111,7 @@ func updateConfigWithRepair(update func(*Config) error, repair bool) (Config, st
 			return config, backup, fmt.Errorf("Pipkin's settings file is damaged. Run 'pipkin install' to repair it: %w", err)
 		}
 		if err != nil && repair {
-			backup, err = backupInstallConfig(path, data)
+			backup, err = writeTempFile(filepath.Dir(path), "config.json.backup-", data, true)
 			if err != nil {
 				return config, backup, fmt.Errorf("could not back up malformed config.json: %w", err)
 			}
@@ -153,27 +167,6 @@ func initializeConfigSalt(config *Config) error {
 		config.Salt = hex.EncodeToString(salt)
 	}
 	return nil
-}
-
-func backupInstallConfig(path string, data []byte) (string, error) {
-	file, err := os.CreateTemp(filepath.Dir(path), "config.json.backup-")
-	if err != nil {
-		return "", err
-	}
-	name := file.Name()
-	_, err = file.Write(data)
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(name)
-		return "", err
-	}
-	return name, nil
 }
 
 func logf(format string, args ...any) {

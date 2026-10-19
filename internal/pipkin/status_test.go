@@ -21,12 +21,7 @@ func statusTestInstallation(t *testing.T, installed bool) string {
 	t.Setenv("HOME", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
 	if installed {
-		if err := os.MkdirAll(filepath.Dir(installedBinary()), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(installedBinary(), []byte("synthetic file; never execute"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeTestBinary(t, installedBinary(), "synthetic file; never execute")
 	}
 	return root
 }

@@ -3,8 +3,6 @@ package pipkin
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,8 +25,7 @@ func testFirmwareRelease(t *testing.T, firmwareVersion string) *firmwareRelease 
 		{Role: "application", File: "pipkin.bin", Offset: 0x10000, Size: 64},
 	} {
 		data := bytes.Repeat([]byte{byte(len(image.Role))}, int(image.Size))
-		digest := sha256.Sum256(data)
-		image.SHA256 = hex.EncodeToString(digest[:])
+		image.SHA256 = sha256Hex(data)
 		if err := os.WriteFile(filepath.Join(folder, image.File), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -461,11 +458,10 @@ func TestFlashConfirmationBoundaries(t *testing.T) {
 	if yes, err := confirmFlashPrompt(context.Background(), strings.NewReader(strings.Repeat("y", 1024)+"\n"), io.Discard, "? "); yes || err == nil {
 		t.Fatal("overlong answer accepted")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := cancelledContext()
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()
-	cancel()
 	if yes, err := confirmFlashPrompt(ctx, reader, io.Discard, "? "); yes || !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled confirmation accepted", yes, err)
 	}

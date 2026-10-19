@@ -28,11 +28,7 @@ func TestCommandPhaseErrorKeepsCauseAndSeparatesSafeDetails(t *testing.T) {
 	if !errors.Is(err, want) || !strings.HasPrefix(err.Error(), "Pipkin couldn't start.") || !strings.Contains(err.Error(), "\nDetails: ") {
 		t.Fatal("phase error lost its summary, technical details or cause")
 	}
-	for _, line := range strings.Split(err.Error(), "\n") {
-		if len(line) > outputWidth || strings.ContainsAny(line, "\x1b\r\t") {
-			t.Fatal("phase error printed unsafe or unbounded terminal details")
-		}
-	}
+	checkTerminalLines(t, err.Error(), true)
 }
 
 func TestInstallFlowSummarizesAfterActivationAndUsesExactPATHHint(t *testing.T) {

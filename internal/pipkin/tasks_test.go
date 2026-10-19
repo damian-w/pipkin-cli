@@ -74,8 +74,7 @@ func TestTaskProviderNormalizationPreservesUncertainty(t *testing.T) {
 
 func TestTaskCollectorsAreIndependentAndCancellationIsUnknown(t *testing.T) {
 	now := func() time.Time { return time.Unix(1800000000, 0) }
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	s := collectTasksWith(ctx, now, taskCollectors{"codex": func(context.Context) TaskProvider {
 		t.Error("canceled collection ran")
 		return TaskProvider{}

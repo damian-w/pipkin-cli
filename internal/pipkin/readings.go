@@ -41,8 +41,12 @@ type Reading struct {
 
 // accountDigest identifies an account to the display without revealing it.
 func accountDigest(prefix, salt, account string) string {
-	digest := sha256.Sum256([]byte(salt + account))
-	return prefix + hex.EncodeToString(digest[:8])
+	return prefix + sha256Hex([]byte(salt + account))[:16]
+}
+
+func sha256Hex(data []byte) string {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 func usedTenths(percent float64) int {

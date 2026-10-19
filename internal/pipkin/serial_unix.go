@@ -51,12 +51,8 @@ func (p *unixPort) Write(parent context.Context, data []byte) error {
 		}
 		n, err := unix.Write(p.fd, data)
 		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) || err == nil && n == 0 {
-			timer := time.NewTimer(10 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
+			if err := sleepContext(ctx, 10*time.Millisecond); err != nil {
+				return err
 			}
 			continue
 		}

@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,10 +200,7 @@ func multiDisplayFixture(t *testing.T) (*flashFixture, *[]string) {
 		asked = append(asked, port)
 		if len(f.tool.writes) > 0 && identity != nil {
 			// After flashing, the chosen display answers with the new version.
-			identity = map[string]string{}
-			for key, value := range identities[port] {
-				identity[key] = value
-			}
+			identity = maps.Clone(identities[port])
 			identity["firmware"] = "2.0.1"
 		}
 		return identity, nil
@@ -285,8 +282,7 @@ func TestFirmwareReleaseStagesEveryBoard(t *testing.T) {
 		if image.Role == "bootloader" {
 			image.Offset = testLargeBoard.BootloaderOffset
 		}
-		digest := sha256.Sum256(data)
-		image.Size, image.SHA256 = int64(len(data)), hex.EncodeToString(digest[:])
+		image.Size, image.SHA256 = int64(len(data)), sha256Hex(data)
 		f.files[image.File] = data
 		large.Images = append(large.Images, image)
 	}
@@ -335,8 +331,7 @@ func TestFirmwareReleaseStagesEveryBoard(t *testing.T) {
 
 	// A 4-inch manifest whose images are for the classic ESP32 is rejected.
 	f.files["pipkin-es3c40p.bin"] = withChipID(f.files["pipkin-es3c40p.bin"], 0)
-	digest := sha256.Sum256(f.files["pipkin-es3c40p.bin"])
-	large.Images[2].SHA256 = hex.EncodeToString(digest[:])
+	large.Images[2].SHA256 = sha256Hex(f.files["pipkin-es3c40p.bin"])
 	f.files[testLargeBoard.manifestFile()], _ = json.Marshal(large)
 	f.refreshChecksums()
 	parent := t.TempDir()

@@ -87,8 +87,7 @@ func snapshotAutostart() (func() error, error) {
 		if err == nil {
 			enabled = true
 		} else {
-			var exit *exec.ExitError
-			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			if exit, ok := errors.AsType[*exec.ExitError](err); !ok || exit.ExitCode() != 1 {
 				return nil, err
 			}
 		}

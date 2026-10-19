@@ -91,7 +91,7 @@ type codexTaskMeta struct {
 }
 
 func codexTaskSource(raw json.RawMessage) string {
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+	if !jsonPresent(raw) {
 		return ""
 	}
 	var source string
@@ -195,7 +195,7 @@ func codexTaskAnswers(raw json.RawMessage, answered map[string]bool) error {
 
 func codexTaskTailInput(turn *codexTaskTurn) bool {
 	for _, item := range turn.Items {
-		if item.Type == "userInputResponse" && item.Completed != nil && !*item.Completed && len(item.RequestID) > 0 && !bytes.Equal(item.RequestID, []byte("null")) {
+		if item.Type == "userInputResponse" && item.Completed != nil && !*item.Completed && jsonPresent(item.RequestID) {
 			return true
 		}
 	}
@@ -270,7 +270,7 @@ func codexTaskPendingCards(turns []codexTaskTurn, certainFrom int) (cards int, u
 	}
 	questions := map[string]bool{}
 	for _, item := range turn.Items {
-		if item.Type != "agentMessage" || len(item.Questions) == 0 || bytes.Equal(bytes.TrimSpace(item.Questions), []byte("null")) {
+		if item.Type != "agentMessage" || !jsonPresent(item.Questions) {
 			continue
 		}
 		var rows []json.RawMessage

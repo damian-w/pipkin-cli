@@ -138,16 +138,7 @@ func TestOutputSanitizesAndWrapsEveryProviderString(t *testing.T) {
 	if err := writeProviders(&got, s, outputTestNow, true); err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(strings.TrimSuffix(got.String(), "\n"), "\n") {
-		if len(line) > outputWidth {
-			t.Fatalf("line exceeds terminal width: %q", line)
-		}
-		for _, r := range line {
-			if r < 32 || r > 126 {
-				t.Fatalf("unsafe terminal character %U", r)
-			}
-		}
-	}
+	checkTerminalLines(t, got.String(), true)
 	if !strings.Contains(got.String(), "raw_plan-slug") || strings.Count(strings.ToLower(got.String()), "z") != 150 {
 		t.Fatal("wrapping discarded the raw plan or long model label")
 	}
@@ -208,6 +199,17 @@ func TestOutputWriterFailuresPropagate(t *testing.T) {
 	}{{&outputTestWriter{err: want}, want}, {&outputTestWriter{writes: 2, err: want}, want}, {&outputTestWriter{short: true}, io.ErrShortWrite}} {
 		if err := writeProviders(c.writer, Status{Readings: map[string]*Reading{"codex": {SessionNoCap: true}}}, outputTestNow, true); !errors.Is(err, c.want) {
 			t.Fatalf("writer error = %v, want %v", err, c.want)
+		}
+	}
+}
+
+// checkTerminalLines fails on a line that would wrap or, when asciiOnly is set,
+// on any character outside printable ASCII.
+func checkTerminalLines(t *testing.T, text string, asciiOnly bool) {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		if len(line) > outputWidth || asciiOnly && strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
+			t.Fatalf("unsafe or overlong terminal line: %q", line)
 		}
 	}
 }

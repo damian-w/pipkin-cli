@@ -51,14 +51,7 @@ func newClaudeTaskFixture(t *testing.T) *claudeTaskFixture {
 
 func writeClaudeTaskFixture(t *testing.T, path string, value any) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := writeJSON(path, value); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -183,8 +176,7 @@ func TestClaudeTaskUnavailableAndBoundedReads(t *testing.T) {
 	if p := collectClaudeTasksWith(context.Background(), f.deps); p.Tasks != nil {
 		t.Fatal("oversized registry was accepted")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	f.deps.inspect = func(int) (processIdentity, error) {
 		t.Fatal("canceled collector inspected a process")
 		return processIdentity{}, nil

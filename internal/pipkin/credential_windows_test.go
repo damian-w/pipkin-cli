@@ -33,8 +33,7 @@ func TestWindowsCredentialError(t *testing.T) {
 			}
 		})
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	if err := windowsCredentialError(ctx, windows.ERROR_NOT_FOUND); !errors.Is(err, context.Canceled) {
 		t.Fatalf("credential cancellation = %v", err)
 	}
@@ -90,8 +89,7 @@ func TestDecodeWindowsCredential(t *testing.T) {
 }
 
 func TestWindowsCredentialStopsBeforeStoreAccess(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	if _, err := readGenericPassword(ctx, "fixture", "account"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("credential cancellation = %v", err)
 	}

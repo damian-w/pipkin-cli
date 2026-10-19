@@ -3,6 +3,7 @@ package pipkin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"unsafe"
 
@@ -71,15 +72,8 @@ func readGenericPasswordMode(ctx context.Context, service, account string, allow
 	}
 	constantError := false
 	constant := func(lib uintptr, name string) uintptr {
-		address, err := purego.Dlsym(lib, name)
+		value, err := darwinConstant(lib, name)
 		if err != nil {
-			constantError = true
-			return 0
-		}
-		// Framework-owned memory: preserve the foreign pointer without arithmetic.
-		pointer := *(*unsafe.Pointer)(unsafe.Pointer(&address))
-		value := *(*uintptr)(pointer)
-		if value == 0 {
 			constantError = true
 		}
 		return value
@@ -133,4 +127,19 @@ func readGenericPasswordMode(ctx context.Context, service, account string, allow
 		return nil, errCredentialInvalid
 	}
 	return append([]byte(nil), unsafe.Slice(pointer, int(length))...), nil
+}
+
+// darwinConstant reads an exported framework constant, such as a CFString key.
+func darwinConstant(library uintptr, name string) (uintptr, error) {
+	address, err := purego.Dlsym(library, name)
+	if err != nil {
+		return 0, err
+	}
+	// Framework-owned memory: preserve the foreign pointer without arithmetic.
+	pointer := *(*unsafe.Pointer)(unsafe.Pointer(&address))
+	value := *(*uintptr)(pointer)
+	if value == 0 {
+		return 0, fmt.Errorf("empty native constant %s", name)
+	}
+	return value, nil
 }

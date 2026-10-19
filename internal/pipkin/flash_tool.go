@@ -365,19 +365,11 @@ func (t *flashTool) run(parent context.Context, timeout time.Duration, args ...s
 	defer cancel()
 	// esptool falls back to host config files when ESPTOOL_CFGFILE is missing
 	// or lacks its section. Supply a real minimal section to prevent that fallback.
-	config, err := os.CreateTemp(filepath.Dir(t.path), ".pipkin-esptool-*.cfg")
+	config, err := writeTempFile(filepath.Dir(t.path), ".pipkin-esptool-*.cfg", []byte("[esptool]\nopen_port_attempts = 1\n"), false)
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(config.Name())
-	_, writeErr := config.WriteString("[esptool]\nopen_port_attempts = 1\n")
-	closeErr := config.Close()
-	if writeErr != nil {
-		return nil, writeErr
-	}
-	if closeErr != nil {
-		return nil, closeErr
-	}
+	defer os.Remove(config)
 	command := exec.CommandContext(ctx, t.path, args...)
 	// Local esptool configuration and inherited ESPTOOL_* flags must not change
 	// the fixed flash plan (including reset, stub, chip and finite retries).
@@ -390,7 +382,7 @@ func (t *flashTool) run(parent context.Context, timeout time.Duration, args ...s
 		}
 		command.Env = append(command.Env, value)
 	}
-	command.Env = append(command.Env, "NO_COLOR=1", "ESPTOOL_CFGFILE="+config.Name())
+	command.Env = append(command.Env, "NO_COLOR=1", "ESPTOOL_CFGFILE="+config)
 	output := cappedBuffer{limit: maxToolOutputBytes}
 	command.Stdout, command.Stderr = &output, &output
 	command.WaitDelay = 2 * time.Second

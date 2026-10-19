@@ -301,11 +301,7 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 			if err != nil || strings.Contains(prompt, "Confirm this is an ES3C40P") != (action == "Install") || !strings.Contains(output.String(), "4-inch") {
 				t.Fatal(output.String(), prompt, err)
 			}
-			for _, line := range strings.Split(output.String(), "\n") {
-				if len(line) >= 80 || strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
-					t.Fatalf("unsafe or overlong plan line: %q", line)
-				}
-			}
+			checkTerminalLines(t, output.String(), true)
 		})
 	}
 	f := newFlashFixture(t)
@@ -322,11 +318,7 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 	if err := f.run(context.Background(), flashOptions{}, "yes\n"); err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(f.output.String(), "\n") {
-		if len(line) >= 80 {
-			t.Fatalf("flash output exceeds terminal width: %q", line)
-		}
-	}
+	checkTerminalLines(t, f.output.String(), false)
 }
 
 func flashRecoveryHint(goos, port string) string {
@@ -341,11 +333,7 @@ func TestFlashRecoveryIsReadableSafeAndPreservesCause(t *testing.T) {
 		if !errors.Is(err, boom) || strings.Contains(text, "didn't finish") == written || strings.Index(text, "To fix it:") > strings.Index(text, "Details:") || !strings.Contains(text, "pipkin flash --port TESTPORT --version 2.0.1 --reinstall") {
 			t.Fatal(text)
 		}
-		for _, line := range strings.Split(text, "\n") {
-			if len(line) >= 80 || strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
-				t.Fatalf("unsafe or overlong recovery line: %q", line)
-			}
-		}
+		checkTerminalLines(t, text, true)
 	}
 }
 

@@ -129,8 +129,7 @@ func TestClaudeCredentialPreference(t *testing.T) {
 }
 
 func TestClaudeCredentialPreferenceCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := cancelledContext()
 	if _, err := loadClaudeCredentialFor(ctx, "darwin", nil, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled credential selection continued")
 	}

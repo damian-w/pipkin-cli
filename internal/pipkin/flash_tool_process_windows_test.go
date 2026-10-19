@@ -74,8 +74,7 @@ func TestFlashWindowsConsoleFixture(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	parent, stopParent := context.WithCancel(context.Background())
-	stopParent()
+	parent := cancelledContext()
 	// The real write boundary ignores an interactive cancellation, while each
 	// tool call supplies its own finite deadline. Exercise both properties.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 8*time.Second)
@@ -203,8 +202,7 @@ func TestFlashWindowsJobCancellationAndCloseFallback(t *testing.T) {
 		})
 	}
 	t.Run("detached-parent-keeps-tool-timeout", func(t *testing.T) {
-		parent, cancel := context.WithCancel(context.Background())
-		cancel()
+		parent := cancelledContext()
 		tool := &flashTool{path: binary, output: io.Discard}
 		start := time.Now()
 		_, err := tool.run(context.WithoutCancel(parent), 200*time.Millisecond, "hang", filepath.Join(t.TempDir(), "deadline-survived"))
