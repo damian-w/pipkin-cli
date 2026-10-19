@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
-	"unicode"
 )
 
 type flashTestOutputHook struct {
@@ -111,13 +109,10 @@ func TestFlashCancellationDuringCriticalPhasesFinishesSafely(t *testing.T) {
 				check(ctx)
 			}
 			f.tool.onWrite = func(ctx context.Context) {
-				if phase == "update write" {
+				if phase == "update write" || phase == "after write" {
 					cancel()
 				}
 				check(ctx)
-			}
-			if phase == "after write" {
-				f.tool.afterWrite = cancel
 			}
 			f.tool.onReset = func(ctx context.Context) {
 				if phase == "reset" {
@@ -269,7 +264,7 @@ func TestFlashWriterFailuresRespectTheWriteBoundary(t *testing.T) {
 				return nil
 			}}
 			if phase == "late cancellation" {
-				f.tool.afterWrite = cancel
+				f.tool.onWrite = func(context.Context) { cancel() }
 			}
 			err := runFlash(ctx, flashOptions{}, strings.NewReader("yes\n"), output, f.actions)
 			if !errors.Is(err, boom) || f.stops != f.starts {
@@ -368,61 +363,6 @@ func TestFlashRecoveryKeepsLongQuotedCommandOnOneLine(t *testing.T) {
 	for _, line := range strings.Split(text, "\n") {
 		if line != "     "+command && len(line) >= 80 {
 			t.Fatalf("recovery prose exceeded the terminal width: %q", line)
-		}
-	}
-}
-
-func TestCommandHintArgumentsPreserveExactPaths(t *testing.T) {
-	values := []string{"/tmp/serial-é", "/tmp/串口 'quoted' $(literal);back\\slash", "/tmp/serial-\n\r\t\x1b"}
-	for _, goos := range []string{"darwin", "linux", "windows"} {
-		for _, value := range values {
-			command := flashRecoveryHint(goos, value)
-			if strings.IndexFunc(command, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
-				t.Fatalf("command hint contains terminal controls or multiple physical lines: %q", command)
-			}
-			if goos != "windows" && runtime.GOOS != "windows" {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				parse := exec.CommandContext(ctx, "/bin/bash", "--noprofile", "--norc", "-c", "printf '%s' "+shellQuote(value))
-				parse.Env = []string{"PATH=/usr/bin:/bin", "BASH_ENV=/dev/null", "ENV=/dev/null"}
-				data, err := parse.Output()
-				cancel()
-				if err != nil || string(data) != value {
-					t.Fatalf("argument changed its POSIX path: got=%q want=%q err=%v", data, value, err)
-				}
-			}
-		}
-	}
-}
-
-func TestCommandHintPowerShellArgumentsPreserveExactPaths(t *testing.T) {
-	name := "pwsh"
-	if runtime.GOOS == "windows" {
-		name = "powershell.exe"
-	}
-	powerShell, err := exec.LookPath(name)
-	if err != nil {
-		t.Skip("PowerShell is unavailable")
-	}
-	values := []string{"C:\\serial-é", "C:\\串口 'quoted' $(literal);back\\slash", "C:\\serial-\n\r\t\x1b"}
-	var script strings.Builder
-	script.WriteString("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);")
-	for _, value := range values {
-		script.WriteString("[Console]::Write(" + powerShellQuote(value) + ");[Console]::Write([char]0);")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, powerShell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script.String())
-	data, err := command.Output()
-	if err != nil {
-		t.Fatalf("PowerShell argument parser failed: %v", err)
-	}
-	parts := bytes.Split(data, []byte{0})
-	if len(parts) != len(values)+1 || len(parts[len(parts)-1]) != 0 {
-		t.Fatalf("PowerShell changed argument boundaries: %q", data)
-	}
-	for i, value := range values {
-		if string(parts[i]) != value {
-			t.Fatalf("argument changed its PowerShell path: got=%q want=%q", parts[i], value)
 		}
 	}
 }

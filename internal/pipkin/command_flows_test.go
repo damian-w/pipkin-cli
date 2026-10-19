@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+	"unicode"
 )
 
 type flowTestLock struct{ closed bool }
@@ -261,16 +263,66 @@ func TestCommandHintsEncodeControlCharactersWithoutChangingThePath(t *testing.T)
 	if strings.ContainsAny(got, "\n\r\x1b") || !strings.Contains(got, `\012`) || !strings.Contains(got, `\033`) {
 		t.Fatalf("shell hint contains terminal controls or lost the exact path: %q", got)
 	}
-	// Parse only the quoted value and print it. No suggested command runs and
-	// no startup file is opened; this verifies the shell receives the exact path.
-	if bash, err := exec.LookPath("bash"); err == nil && runtime.GOOS != "windows" {
-		cmd := exec.Command(bash, "-c", "printf '%s' "+shellQuote(value))
-		if output, err := cmd.Output(); err != nil || string(output) != value {
-			t.Fatalf("shell-safe hint did not round trip its path: %q, %v", output, err)
-		}
-	}
 	got = commandHintFor("windows", "C:\\synthetic\\a\x1b\n\\pipkin.exe", false, "status")
 	if strings.ContainsAny(got, "\n\r\x1b") || !strings.Contains(got, "[char]::ConvertFromUtf32(27)") || !strings.Contains(got, "[char]::ConvertFromUtf32(10)") {
 		t.Fatalf("PowerShell hint contains raw terminal controls: %q", got)
+	}
+}
+
+func TestCommandHintArgumentsPreserveExactPaths(t *testing.T) {
+	values := []string{"/tmp/serial-é", "/tmp/串口 'quoted' $(literal);back\\slash", "/tmp/serial-\n\r\t\x1b", "/synthetic/a'\\\n\x1b[31m/pipkin"}
+	for _, value := range values {
+		for _, goos := range []string{"darwin", "linux", "windows"} {
+			command := flashRecoveryHint(goos, value)
+			if strings.IndexFunc(command, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+				t.Fatalf("command hint contains terminal controls or multiple physical lines: %q", command)
+			}
+		}
+		if runtime.GOOS == "windows" {
+			continue
+		}
+		// Parse only the quoted value and print it. No suggested command runs and
+		// no startup file is opened; this verifies the shell receives the exact path.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		parse := exec.CommandContext(ctx, "/bin/bash", "--noprofile", "--norc", "-c", "printf '%s' "+shellQuote(value))
+		parse.Env = []string{"PATH=/usr/bin:/bin", "BASH_ENV=/dev/null", "ENV=/dev/null"}
+		data, err := parse.Output()
+		cancel()
+		if err != nil || string(data) != value {
+			t.Fatalf("argument changed its POSIX path: got=%q want=%q err=%v", data, value, err)
+		}
+	}
+}
+
+func TestCommandHintPowerShellArgumentsPreserveExactPaths(t *testing.T) {
+	name := "pwsh"
+	if runtime.GOOS == "windows" {
+		name = "powershell.exe"
+	}
+	powerShell, err := exec.LookPath(name)
+	if err != nil {
+		t.Skip("PowerShell is unavailable")
+	}
+	values := []string{"C:\\serial-é", "C:\\串口 'quoted' $(literal);back\\slash", "C:\\serial-\n\r\t\x1b"}
+	var script strings.Builder
+	script.WriteString("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);")
+	for _, value := range values {
+		script.WriteString("[Console]::Write(" + powerShellQuote(value) + ");[Console]::Write([char]0);")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, powerShell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script.String())
+	data, err := command.Output()
+	if err != nil {
+		t.Fatalf("PowerShell argument parser failed: %v", err)
+	}
+	parts := bytes.Split(data, []byte{0})
+	if len(parts) != len(values)+1 || len(parts[len(parts)-1]) != 0 {
+		t.Fatalf("PowerShell changed argument boundaries: %q", data)
+	}
+	for i, value := range values {
+		if string(parts[i]) != value {
+			t.Fatalf("argument changed its PowerShell path: got=%q want=%q", parts[i], value)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"syscall"
@@ -149,27 +150,8 @@ func TestFlashWindowsConsoleFixture(t *testing.T) {
 	}
 }
 
-func flashWindowsToolFixture(t *testing.T) string {
-	t.Helper()
-	if binary := os.Getenv("PIPKIN_TEST_ESPTOOL_PATH"); binary != "" {
-		// A controlled native run may supply the cross-built fixture on a host
-		// without Go or the repository. Production never reads this variable.
-		info, err := os.Stat(binary)
-		if !filepath.IsAbs(binary) || err != nil || !info.Mode().IsRegular() {
-			t.Fatal("PIPKIN_TEST_ESPTOOL_PATH must name an existing absolute fixture file")
-		}
-		return binary
-	}
-	binary := filepath.Join(t.TempDir(), "fake-esptool.exe")
-	build := exec.Command("go", "build", "-o", binary, "./testdata/esptool")
-	if data, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("fixture build failed: %v\n%s", err, data)
-	}
-	return binary
-}
-
 func TestFlashWindowsJobCancellationAndCloseFallback(t *testing.T) {
-	binary := flashWindowsToolFixture(t)
+	binary := buildFlashToolFixture(t)
 	for _, fallback := range []bool{false, true} {
 		name := "terminate-job"
 		if fallback {
@@ -241,4 +223,27 @@ func TestFlashWindowsJobCancellationAndCloseFallback(t *testing.T) {
 			t.Fatalf("child survived normal parent exit: %v", err)
 		}
 	})
+}
+
+func TestFlashResetPulsesEnableWithGPIO0Released(t *testing.T) {
+	var calls []uint32
+	if err := pulseEnable(func(function uint32) error { calls = append(calls, function); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if want := []uint32{windows.SETRTS, windows.CLRDTR, windows.CLRRTS, windows.CLRDTR}; !slices.Equal(calls, want) {
+		t.Fatalf("reset sequence = %v, want %v", calls, want)
+	}
+	// A failed line change must still release EN.
+	calls = nil
+	boom := errors.New("fixture line failure")
+	err := pulseEnable(func(function uint32) error {
+		calls = append(calls, function)
+		if function == windows.SETRTS {
+			return boom
+		}
+		return nil
+	})
+	if !errors.Is(err, boom) || !slices.Contains(calls, windows.CLRRTS) {
+		t.Fatalf("failed pulse left EN held: %v, %v", calls, err)
+	}
 }

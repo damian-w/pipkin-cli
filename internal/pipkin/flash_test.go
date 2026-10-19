@@ -56,7 +56,6 @@ type fakeFirmwareFlasher struct {
 	probeErr, readErr      error
 	eraseErr               error
 	secondMAC              string
-	afterWrite             func()
 	onProbe                func(context.Context, int)
 	onRead                 func(context.Context, int64)
 	onErase, onWrite       func(context.Context)
@@ -88,9 +87,6 @@ func (f *fakeFirmwareFlasher) Write(ctx context.Context, _ string, images []flas
 		f.onWrite(ctx)
 	}
 	f.writes = append(f.writes, images)
-	if f.afterWrite != nil {
-		f.afterWrite()
-	}
 	return f.writeErr
 }
 func (f *fakeFirmwareFlasher) Reset(ctx context.Context, _ string) error {
@@ -132,13 +128,6 @@ func newFlashFixture(t *testing.T) *flashFixture {
 	}
 	f.tool = &fakeFirmwareFlasher{probe: flashProbe{Chip: "esp32", FlashBytes: 4 << 20, MAC: "aa:bb:cc:dd:ee:ff"}, table: data}
 	f.actions = flashActions{
-		load: func(_ context.Context, _ string, demo bool) (*firmwareRelease, error) {
-			f.demo = demo
-			return f.release, f.loadErr
-		},
-		prepare: func(context.Context, io.Writer) (firmwareFlasher, error) { return f.tool, f.prepareErr },
-	}
-	f.actions.boardActions = boardActions{
 		ports: func() []string { return []string{"TESTPORT"} },
 		identity: func(context.Context, string, time.Duration) (map[string]string, error) {
 			f.identities++
@@ -159,6 +148,11 @@ func newFlashFixture(t *testing.T) *flashFixture {
 			lock.Close()
 			return f.startErr
 		},
+		load: func(_ context.Context, _ string, demo bool) (*firmwareRelease, error) {
+			f.demo = demo
+			return f.release, f.loadErr
+		},
+		prepare: func(context.Context, io.Writer) (firmwareFlasher, error) { return f.tool, f.prepareErr },
 	}
 	return f
 }
@@ -450,15 +444,8 @@ func TestFlashFailureRestoresHelperAndReportsRecovery(t *testing.T) {
 	}
 }
 
-func TestFlashCancellationRestoresStoppedHelper(t *testing.T) {
+func TestFlashLeavesAStoppedHelperStopped(t *testing.T) {
 	f := newFlashFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	f.tool.afterWrite = cancel
-	if err := f.run(ctx, flashOptions{}, "y\n"); err != nil || f.starts != 1 || f.tool.resets != 1 || f.identities != 2 || strings.Count(f.output.String(), "Finishing the firmware write") != 1 {
-		t.Fatal("late cancellation interrupted the write or verification", err, f.output.String())
-	}
-	f = newFlashFixture(t)
 	f.running = false
 	if err := f.run(context.Background(), flashOptions{}, "n\n"); err != nil || f.stops != 0 || f.starts != 0 {
 		t.Fatal("a stopped helper was incorrectly started", err)

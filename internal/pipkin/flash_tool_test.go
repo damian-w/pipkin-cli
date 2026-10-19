@@ -304,16 +304,19 @@ func TestFlashToolPinnedPlatforms(t *testing.T) {
 	}
 }
 
-func TestFlashToolSubprocessBackend(t *testing.T) {
-	dir := t.TempDir()
-	binary := filepath.Join(dir, "fake-esptool")
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	command := exec.Command("go", "build", "-o", binary, "./testdata/esptool")
-	if data, err := command.CombinedOutput(); err != nil {
+// buildFlashToolFixture builds the fake esptool in testdata/esptool.
+func buildFlashToolFixture(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), executableName("fake-esptool"))
+	if data, err := exec.Command("go", "build", "-o", binary, "./testdata/esptool").CombinedOutput(); err != nil {
 		t.Fatalf("fixture build failed: %v\n%s", err, data)
 	}
+	return binary
+}
+
+func TestFlashToolSubprocessBackend(t *testing.T) {
+	dir := t.TempDir()
+	binary := buildFlashToolFixture(t)
 	log := filepath.Join(dir, "calls")
 	t.Setenv("PIPKIN_TOOL_TEST_LOG", log)
 	tool := &flashTool{path: binary, output: io.Discard}

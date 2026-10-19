@@ -35,9 +35,6 @@ func main() {
 		case "version":
 			fmt.Println("esptool v5.4.0\n5.4.0")
 			return
-		case "--help":
-			fmt.Println("write-flash read-flash flash-id get-security-info")
-			return
 		case "flash-id":
 			if os.Getenv("PIPKIN_TOOL_TEST_CHIP") == "esp32s3" {
 				fmt.Println("Connected to ESP32-S3 on COM7:\nChip type:          ESP32-S3 (QFN56) (revision v0.2)\nMAC:                7c:e8:b1:b1:6e:b8\nDetected flash size: 16MB")

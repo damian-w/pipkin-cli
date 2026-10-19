@@ -91,7 +91,7 @@ func stageLocalBinaries(source, target, goos, goarch string) (_ *stagedBinaries,
 			return nil, err
 		}
 		artifact.staged = filepath.Join(staged.folder, artifact.name)
-		copyErr := writeStagedFile(artifact.staged, func(w io.Writer) error {
+		copyErr := writeStagedFile(artifact.staged, 0o755, func(w io.Writer) error {
 			return copyBounded(w, file, maxBinaryBytes)
 		})
 		closeErr := file.Close()
@@ -112,8 +112,8 @@ func downloadTo(url string, writer io.Writer, limit int64) error {
 	return download(httpClient, request, writer, limit)
 }
 
-func writeStagedFile(path string, write func(io.Writer) error) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+func writeStagedFile(path string, mode os.FileMode, write func(io.Writer) error) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func parseChecksums(data []byte) (map[string]string, error) {
 
 func stageVerifiedAsset(release string, artifact *binaryArtifact, folder, expected string) error {
 	artifact.staged = filepath.Join(folder, artifact.name)
-	return writeStagedFile(artifact.staged, func(writer io.Writer) error {
+	return writeStagedFile(artifact.staged, 0o755, func(writer io.Writer) error {
 		hash := sha256.New()
 		if err := downloadTo(release+"/"+artifact.asset, io.MultiWriter(writer, hash), maxBinaryBytes); err != nil {
 			return err

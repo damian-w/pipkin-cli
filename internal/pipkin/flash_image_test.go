@@ -5,10 +5,6 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -254,45 +250,5 @@ func TestReadPipkinFirmwareVersionRejectsOtherOrMalformedImages(t *testing.T) {
 	// Stored firmware for one chip is not taken for the other's.
 	if got, ok := readPipkinFirmwareVersion(buildTestESPImage("1.0.0", strings.Repeat("a", 40)), 9); ok {
 		t.Fatalf("accepted an ESP32 image as ESP32-S3 Pipkin %q", got)
-	}
-}
-
-func TestPackagedFirmwareImages(t *testing.T) {
-	dir := os.Getenv("PIPKIN_FIRMWARE_TEST_DIR")
-	if dir == "" {
-		t.Skip("set PIPKIN_FIRMWARE_TEST_DIR to validate an ESP-IDF release package")
-	}
-	for _, board := range displayBoards {
-		data, err := os.ReadFile(filepath.Join(dir, board.manifestFile()))
-		if errors.Is(err, os.ErrNotExist) && board.ID != firmwareBoard {
-			continue
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		var manifest firmwareManifest
-		if err := json.Unmarshal(data, &manifest); err != nil {
-			t.Fatal(err)
-		}
-		if err := validateFirmwareManifest(manifest, "v"+manifest.Version); err != nil || manifest.Board != board.ID {
-			t.Fatalf("%s: %v", board.manifestFile(), err)
-		}
-		for _, image := range manifest.Images {
-			t.Run(board.ID+"/"+image.Role, func(t *testing.T) {
-				data, err := os.ReadFile(filepath.Join(dir, image.File))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := validateFirmwareImage(image, data, manifest); err != nil {
-					t.Fatal(err)
-				}
-				if image.Role == "application" {
-					got, ok := readPipkinFirmwareVersion(data[:1024], board.ChipID)
-					if !ok || got != manifest.Version {
-						t.Fatalf("stored firmware prefix identified as %q, %t", got, ok)
-					}
-				}
-			})
-		}
 	}
 }

@@ -53,6 +53,15 @@ func testTwoBoardRelease(t *testing.T, firmwareVersion string) *firmwareRelease 
 	return release
 }
 
+// newLargeFlashFixture is a flash fixture for the 4-inch board with the two-board release.
+func newLargeFlashFixture(t *testing.T) *flashFixture {
+	t.Helper()
+	f := newFlashFixture(t)
+	f.release = testTwoBoardRelease(t, "2.0.1")
+	f.tool.probe = flashProbe{Chip: "esp32s3", FlashBytes: 16 << 20, MAC: "7c:e8:b1:b1:6e:b8"}
+	return f
+}
+
 func testLargeIdentity(firmwareVersion string) map[string]string {
 	identity := testFlashIdentity(firmwareVersion)
 	identity["board"] = testLargeBoard.ID
@@ -82,9 +91,7 @@ func TestDisplayBoardsHaveDistinctReleaseAssets(t *testing.T) {
 func TestFlash4InchBoardInstallAndUpdate(t *testing.T) {
 	for _, update := range []bool{false, true} {
 		t.Run(map[bool]string{false: "first-install", true: "update"}[update], func(t *testing.T) {
-			f := newFlashFixture(t)
-			f.release = testTwoBoardRelease(t, "2.0.1")
-			f.tool.probe = flashProbe{Chip: "esp32s3", FlashBytes: 16 << 20, MAC: "7c:e8:b1:b1:6e:b8"}
+			f := newLargeFlashFixture(t)
 			f.final = testLargeIdentity("2.0.1")
 			if update {
 				f.initial = testLargeIdentity("2.0.0")
@@ -124,9 +131,7 @@ func TestFlash4InchBoardInstallAndUpdate(t *testing.T) {
 func TestFlash4InchBoardChecks(t *testing.T) {
 	for _, scenario := range []string{"old-release", "identity-chip-mismatch", "flash-size", "secure"} {
 		t.Run(scenario, func(t *testing.T) {
-			f := newFlashFixture(t)
-			f.release = testTwoBoardRelease(t, "2.0.1")
-			f.tool.probe = flashProbe{Chip: "esp32s3", FlashBytes: 16 << 20, MAC: "7c:e8:b1:b1:6e:b8"}
+			f := newLargeFlashFixture(t)
 			want := "does not match"
 			switch scenario {
 			case "old-release":
@@ -151,19 +156,15 @@ func TestFlash4InchBoardChecks(t *testing.T) {
 		})
 	}
 	// A CYD with the 4-inch board's identity, or the reverse, never gets the other's images.
-	f := newFlashFixture(t)
-	f.release = testTwoBoardRelease(t, "2.0.1")
+	f := newLargeFlashFixture(t)
 	f.initial = testFlashIdentity("2.0.0")
-	f.tool.probe = flashProbe{Chip: "esp32s3", FlashBytes: 16 << 20, MAC: "7c:e8:b1:b1:6e:b8"}
 	if err := f.run(context.Background(), flashOptions{}, "yes\n"); err == nil || len(f.tool.writes) != 0 {
 		t.Fatal("an ESP32-S3 reporting the CYD's board was flashed", err)
 	}
 }
 
 func TestFlash4InchDemoReel(t *testing.T) {
-	f := newFlashFixture(t)
-	f.release = testTwoBoardRelease(t, "2.0.1")
-	f.tool.probe = flashProbe{Chip: "esp32s3", FlashBytes: 16 << 20, MAC: "7c:e8:b1:b1:6e:b8"}
+	f := newLargeFlashFixture(t)
 	f.initial = testLargeIdentity("2.0.1")
 	f.final = testLargeIdentity("2.0.1-demo")
 	if err := f.run(context.Background(), flashOptions{Demo: true}, "y\n"); err != nil {
@@ -172,10 +173,8 @@ func TestFlash4InchDemoReel(t *testing.T) {
 	if images := f.tool.writes[0]; len(images) != 1 || filepath.Base(images[0].Path) != "pipkin-demo-es3c40p.bin" {
 		t.Fatal("the 4-inch demo reel was not written", images)
 	}
-	f = newFlashFixture(t)
-	f.release = testTwoBoardRelease(t, "2.0.1")
+	f = newLargeFlashFixture(t)
 	os.Remove(filepath.Join(f.release.Folder, testLargeBoard.demoFile()))
-	f.tool.probe = flashProbe{Chip: "esp32s3", FlashBytes: 16 << 20, MAC: "7c:e8:b1:b1:6e:b8"}
 	if err := f.run(context.Background(), flashOptions{Demo: true}, "y\n"); err == nil || len(f.tool.writes) != 0 || f.tool.erases != 0 {
 		t.Fatal("a missing 4-inch demo reel was not caught before writing", err)
 	}
@@ -262,7 +261,6 @@ func TestFlashPickerCancelsWithoutWriting(t *testing.T) {
 	}
 	// --port skips the picker.
 	f, asked := multiDisplayFixture(t)
-	f.tool.probe = flashProbe{Chip: "esp32", FlashBytes: 4 << 20, MAC: "aa:bb:cc:dd:ee:ff"}
 	if err := f.run(context.Background(), flashOptions{Port: "/dev/cu.usbserial-1"}, "yes\n"); err != nil {
 		t.Fatal(err)
 	}

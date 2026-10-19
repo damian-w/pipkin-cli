@@ -90,17 +90,17 @@ func validateESP32Image(data []byte, chipID uint16) error {
 	return nil
 }
 
-func firmwareCString(data []byte) (string, bool) {
+func firmwareCString(data []byte) string {
 	end := bytes.IndexByte(data, 0)
 	if end < 0 {
-		return "", false
+		return ""
 	}
 	for _, value := range data[:end] {
 		if value < 0x20 || value > 0x7e {
-			return "", false
+			return ""
 		}
 	}
-	return string(data[:end]), true
+	return string(data[:end])
 }
 
 // readPipkinFirmwareVersion recognizes the ESP-IDF application description in a
@@ -126,9 +126,7 @@ func firmwareAppDescription(data []byte) (product, version string, ok bool) {
 	if len(data) < 288 || binary.LittleEndian.Uint32(data[28:32]) < 256 || binary.LittleEndian.Uint32(data[32:36]) != 0xabcd5432 {
 		return "", "", false
 	}
-	product, _ = firmwareCString(data[80:112])
-	version, _ = firmwareCString(data[48:80])
-	return product, version, true
+	return firmwareCString(data[80:112]), firmwareCString(data[48:80]), true
 }
 
 func validatePipkinApplication(data []byte, manifest firmwareManifest) error {

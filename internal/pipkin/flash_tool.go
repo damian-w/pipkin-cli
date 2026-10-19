@@ -258,22 +258,13 @@ func extractFlashTool(ctx context.Context, archive, dir string, asset flashToolA
 		if relative == asset.binary() {
 			mode = 0o700
 		}
-		file, err := os.OpenFile(filepath.Join(dir, relative), os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-		if err != nil {
+		return writeStagedFile(filepath.Join(dir, relative), mode, func(file io.Writer) error {
+			n, err := io.Copy(file, io.LimitReader(content, size+1))
+			if err == nil && n != size {
+				err = errors.New("truncated or oversized esptool archive entry")
+			}
 			return err
-		}
-		n, copyErr := io.Copy(file, io.LimitReader(content, size+1))
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if n != size {
-			return errors.New("truncated or oversized esptool archive entry")
-		}
-		return nil
+		})
 	}
 	if strings.HasSuffix(asset.Archive, ".zip") {
 		reader, err := zip.OpenReader(archive)
@@ -321,7 +312,7 @@ func extractFlashTool(ctx context.Context, archive, dir string, asset flashToolA
 			if count >= 32 {
 				return errors.New("too many esptool archive entries")
 			}
-			if err := visit(entry.Name, entry.Typeflag == tar.TypeReg || entry.Typeflag == tar.TypeRegA, entry.Typeflag == tar.TypeDir, entry.Size, reader); err != nil {
+			if err := visit(entry.Name, entry.Typeflag == tar.TypeReg, entry.Typeflag == tar.TypeDir, entry.Size, reader); err != nil {
 				return err
 			}
 		}
@@ -537,12 +528,14 @@ func (t *flashTool) Probe(ctx context.Context, port string) (flashProbe, error) 
 	return probe, nil
 }
 
-// chipArgs names the probed chip, so esptool never writes to an assumed one.
-func (t *flashTool) chipArgs() ([]string, error) {
-	if t.chip == "" {
-		return nil, errors.New("the board must be checked before its flash is used")
+// flashArgs names the port and the probed chip, so esptool never writes to an
+// assumed one.
+func (t *flashTool) flashArgs(port string) ([]string, error) {
+	args, err := toolPortArgs(port, "no-reset", "no-reset", false)
+	if err == nil && t.chip == "" {
+		err = errors.New("the board must be checked before its flash is used")
 	}
-	return []string{"--chip", t.chip}, nil
+	return append(args, "--chip", t.chip), err
 }
 
 func (t *flashTool) Read(ctx context.Context, port string, offset, size int64) ([]byte, error) {
@@ -555,15 +548,11 @@ func (t *flashTool) Read(ctx context.Context, port string, offset, size int64) (
 	}
 	defer os.RemoveAll(dir)
 	filename := filepath.Join(dir, "flash.bin")
-	args, err := toolPortArgs(port, "no-reset", "no-reset", false)
+	args, err := t.flashArgs(port)
 	if err != nil {
 		return nil, err
 	}
-	chip, err := t.chipArgs()
-	if err != nil {
-		return nil, err
-	}
-	args = slices.Concat(args, chip, []string{"read-flash", "--no-progress", fmt.Sprintf("0x%x", offset), fmt.Sprintf("0x%x", size), filename})
+	args = slices.Concat(args, []string{"read-flash", "--no-progress", fmt.Sprintf("0x%x", offset), fmt.Sprintf("0x%x", size), filename})
 	if _, err := t.run(ctx, 90*time.Second, args...); err != nil {
 		return nil, err
 	}
@@ -594,15 +583,10 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 		previousEnd = image.Offset + info.Size()
 		pairs = append(pairs, fmt.Sprintf("0x%x", image.Offset), image.Path)
 	}
-	args, err := toolPortArgs(port, "no-reset", "no-reset", false)
+	args, err := t.flashArgs(port)
 	if err != nil {
 		return err
 	}
-	chip, err := t.chipArgs()
-	if err != nil {
-		return err
-	}
-	args = append(args, chip...)
 	// Explicit baseline options prevent host esptool configuration from changing
 	// image headers. Individual files leave intervening NVS sectors untouched.
 	options := []string{"--flash-mode", "dio", "--flash-freq", "40m", "--flash-size", "4MB"}
@@ -616,16 +600,12 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 }
 
 func (t *flashTool) EraseSettings(ctx context.Context, port string) error {
-	args, err := toolPortArgs(port, "no-reset", "no-reset", false)
-	if err != nil {
-		return err
-	}
-	chip, err := t.chipArgs()
+	args, err := t.flashArgs(port)
 	if err != nil {
 		return err
 	}
 	// Only first installs explicitly approved by the caller use this operation.
-	args = slices.Concat(args, chip, []string{"erase-region", fmt.Sprintf("0x%x", nvsOffset), fmt.Sprintf("0x%x", nvsSize)})
+	args = slices.Concat(args, []string{"erase-region", fmt.Sprintf("0x%x", nvsOffset), fmt.Sprintf("0x%x", nvsSize)})
 	_, err = t.run(ctx, time.Minute, args...)
 	return err
 }
