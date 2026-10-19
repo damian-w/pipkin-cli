@@ -81,7 +81,7 @@ func TestUninstallRejectsUnsafeTargetsBeforeAnyAction(t *testing.T) {
 			calls := 0
 			action := func() error { calls++; return nil }
 			deps := uninstallDependencies{target: func() (removalTarget, error) { return inspectRemovalTarget(dir, home, work) },
-				lock: func() (io.Closer, error) { calls++; return removalTestCloser{}, nil },
+				lock: func() (io.Closer, error) { calls++; return &flowTestLock{}, nil },
 				stop: action, startup: action, launcher: action, remove: func(removalTarget) error { return action() }}
 			if err := runUninstallCommand(io.Discard, deps); err == nil || calls != 0 {
 				t.Fatalf("unsafe target caused side effects: %v, calls=%d", err, calls)
@@ -185,6 +185,9 @@ func TestUninstallStagesOnlyVerifiedInstallationAndPreservesReplacement(t *testi
 	if err != nil || tombstone == "" {
 		t.Fatalf("verified staging failed: %v", err)
 	}
+	if tombstone == target.dir || filepath.Dir(tombstone) != filepath.Dir(target.dir) {
+		t.Fatalf("unsafe removal destination %q", tombstone)
+	}
 	removalTestMarkers(t, dir)
 	if err := os.RemoveAll(tombstone); err != nil {
 		t.Fatal(err)
@@ -220,23 +223,18 @@ func TestUninstallRejectsChangedDirectoryOrNewUnrelatedFiles(t *testing.T) {
 	}
 }
 
-type removalTestCloser struct{ close func() }
-
-func (c removalTestCloser) Close() error {
-	if c.close != nil {
-		c.close()
-	}
-	return nil
-}
-
 func TestUninstallFlowOrdersActionsAndStopsOnFailure(t *testing.T) {
 	for _, failure := range []string{"", "lock", "stop", "startup", "launcher", "remove"} {
 		t.Run(failure, func(t *testing.T) {
 			dir, home, work := removalTestInstallation(t)
 			var calls []string
+			lock := &flowTestLock{}
 			want := errors.New("synthetic uninstall failure")
 			action := func(name string) func() error {
 				return func() error {
+					if lock.closed {
+						t.Errorf("%s ran after the lock was released", name)
+					}
 					calls = append(calls, name)
 					if failure == name {
 						return want
@@ -252,7 +250,7 @@ func TestUninstallFlowOrdersActionsAndStopsOnFailure(t *testing.T) {
 					if err := action("lock")(); err != nil {
 						return nil, err
 					}
-					return removalTestCloser{close: func() { calls = append(calls, "unlock") }}, nil
+					return lock, nil
 				},
 				stop: action("stop"), startup: action("startup"), launcher: action("launcher"), remove: func(removalTarget) error { return action("remove")() }}
 			var out bytes.Buffer
@@ -271,8 +269,8 @@ func TestUninstallFlowOrdersActionsAndStopsOnFailure(t *testing.T) {
 			} else if err != nil || !strings.Contains(out.String(), "was removed") {
 				t.Fatalf("success summary: %v %q", err, out.String())
 			}
-			if failure != "lock" {
-				expected = append(expected, "unlock")
+			if lock.closed != (failure != "lock") {
+				t.Fatalf("lock closed=%v after failure %q", lock.closed, failure)
 			}
 			if !reflect.DeepEqual(calls, expected) {
 				t.Fatalf("actions=%v, want=%v", calls, expected)
@@ -289,7 +287,7 @@ func TestUninstallWithoutFolderStillRemovesStartupAndLauncher(t *testing.T) {
 	var calls []string
 	action := func(name string) func() error { return func() error { calls = append(calls, name); return nil } }
 	deps := uninstallDependencies{goos: "darwin", target: func() (removalTarget, error) { return inspectRemovalTarget(dir, home, work) },
-		lock: func() (io.Closer, error) { return removalTestCloser{close: func() {}}, nil },
+		lock: func() (io.Closer, error) { return &flowTestLock{}, nil },
 		stop: action("stop"), startup: action("startup"), launcher: action("launcher"), remove: removeInstallation}
 	var out bytes.Buffer
 	if err := runUninstallCommand(&out, deps); err != nil || !reflect.DeepEqual(calls, []string{"stop", "startup", "launcher"}) {

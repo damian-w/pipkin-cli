@@ -21,6 +21,8 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
+func configHome() string { return envOr("XDG_CONFIG_HOME", filepath.Join(homeDir(), ".config")) }
+
 func configuredAppDir() string {
 	if dir := os.Getenv("PIPKIN_HOME"); dir != "" {
 		return dir

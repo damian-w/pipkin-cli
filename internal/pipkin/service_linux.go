@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-func configHome() string { return envOr("XDG_CONFIG_HOME", filepath.Join(homeDir(), ".config")) }
-
 const systemdUnit = "pipkin.service"
 
 func systemdUnitPath() string {

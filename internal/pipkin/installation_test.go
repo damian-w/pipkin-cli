@@ -253,7 +253,7 @@ func TestActivationFailureRestoresServiceAndRunningHelper(t *testing.T) {
 
 func TestFailedFreshInstallRemovesAutostart(t *testing.T) {
 	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, nil)
-	unregistered := false
+	unregistered, configured, unconfigured := false, false, false
 	actions := installationActions{
 		running: func() (int, error) { return 0, nil },
 		stop:    func() error { return nil },
@@ -264,12 +264,17 @@ func TestFailedFreshInstallRemovesAutostart(t *testing.T) {
 		snapshot: func() (func() error, error) {
 			return func() error { unregistered = true; return nil }, nil
 		},
+		configure:     func() error { configured = true; return nil },
+		undoConfigure: func() error { unconfigured = true; return nil },
 	}
 	if _, err := activateBinaries(staged, actions); err == nil {
 		t.Fatal("fresh install unexpectedly succeeded")
 	}
 	if !unregistered {
 		t.Fatal("failed fresh install left an autostart entry")
+	}
+	if !configured || !unconfigured {
+		t.Fatal("failed fresh install did not undo its configuration")
 	}
 	if _, err := os.Stat(filepath.Join(target, "pipkin")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed fresh install left a binary: %v", err)
@@ -327,37 +332,6 @@ func TestInstalledExecutableCanBeStaged(t *testing.T) {
 	child.Env = append(os.Environ(), "PIPKIN_TEST_INSTALLED_EXECUTABLE=1")
 	if output, err := child.CombinedOutput(); err != nil {
 		t.Fatalf("installed executable could not replace itself: %v\n%s", err, output)
-	}
-}
-
-func TestFreshLauncherIsRemovedOnStartupFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("PIPKIN_HOME", filepath.Join(dir, "app"))
-	source := filepath.Join(dir, "source", "pipkin")
-	writeTestBinary(t, source, "new console")
-	staged, err := stageLocalBinaries(source, filepath.Dir(installedBinary()), runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer staged.close()
-	actions := installationActions{
-		running:       func() (int, error) { return 0, nil },
-		stop:          func() error { return nil },
-		start:         func() error { return errors.New("startup failed") },
-		register:      func() (string, error) { return "test service", nil },
-		snapshot:      noAutostartSnapshot,
-		configure:     installLauncher,
-		undoConfigure: func() error { return os.Remove(launcherPath()) },
-	}
-	if _, err := activateBinaries(staged, actions); err == nil {
-		t.Fatal("fresh install unexpectedly succeeded")
-	}
-	if _, err := os.Lstat(launcherPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed install left its launcher: %v", err)
 	}
 }
 

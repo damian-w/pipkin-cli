@@ -23,3 +23,16 @@ func processInfo(pid int) (processIdentity, error) {
 	}
 	return processIdentity{Started: fmt.Sprintf("%d:%d", created.HighDateTime, created.LowDateTime), Executable: windows.UTF16ToString(buffer[:size])}, nil
 }
+
+func processUserSID(process windows.Handle) (*windows.SID, error) {
+	var token windows.Token
+	if err := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
+		return nil, err
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	return user.User.Sid.Copy()
+}

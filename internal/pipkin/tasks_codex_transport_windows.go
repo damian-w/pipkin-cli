@@ -53,19 +53,6 @@ func openCodexNamedPipe(ctx context.Context, name string, validate func(windows.
 	return &codexPipeConn{file}, nil
 }
 
-func codexProcessSID(process windows.Handle) (*windows.SID, error) {
-	var token windows.Token
-	if err := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
-		return nil, err
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
-	if err != nil {
-		return nil, err
-	}
-	return user.User.Sid.Copy()
-}
-
 func validateCodexNamedPipePeer(handle windows.Handle) error {
 	var pid uint32
 	if err := windows.GetNamedPipeServerProcessId(handle, &pid); err != nil || pid == 0 {
@@ -76,11 +63,11 @@ func validateCodexNamedPipePeer(handle windows.Handle) error {
 		return errors.New("Codex pipe server process query is unavailable")
 	}
 	defer windows.CloseHandle(process)
-	serverSID, err := codexProcessSID(process)
+	serverSID, err := processUserSID(process)
 	if err != nil {
 		return errors.New("Codex pipe server user is unavailable")
 	}
-	currentSID, err := codexProcessSID(windows.CurrentProcess())
+	currentSID, err := processUserSID(windows.CurrentProcess())
 	if err != nil {
 		return errors.New("Codex pipe current user is unavailable")
 	}

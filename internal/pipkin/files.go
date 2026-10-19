@@ -109,10 +109,8 @@ func updateConfigWithRepair(update func(*Config) error, repair bool) (Config, st
 		return config, backup, fmt.Errorf("could not read Pipkin configuration: %w", err)
 	}
 	before := config
-	if update != nil {
-		if err := update(&config); err != nil {
-			return before, backup, err
-		}
+	if err := update(&config); err != nil {
+		return before, backup, err
 	}
 	if before == config {
 		return config, backup, nil

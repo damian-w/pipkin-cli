@@ -23,7 +23,7 @@ func codexTransportTestNamedPipe(t *testing.T, worldAccess bool) (string, window
 
 func codexTransportTestNamedPipeAccess(t *testing.T, extra string) (string, windows.Handle, *windows.SID) {
 	t.Helper()
-	sid, err := codexProcessSID(windows.CurrentProcess())
+	sid, err := processUserSID(windows.CurrentProcess())
 	if err != nil {
 		t.Fatal(err)
 	}

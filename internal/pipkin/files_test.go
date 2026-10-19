@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -23,12 +24,6 @@ func TestConfigUpdatesPreserveOtherFields(t *testing.T) {
 	}
 	if err := os.WriteFile(configPath(), original, 0o600); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := initializedConfig(); err != nil {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(configPath()); !bytes.Equal(data, original) {
-		t.Fatal("reading an initialized configuration must leave its bytes unchanged")
 	}
 	if _, err := updateConfig(func(config *Config) error {
 		config.Port = "new manual"
@@ -74,24 +69,6 @@ func TestConfigCallbackFailureLeavesFileUnchanged(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(configPath()); !bytes.Equal(data, original) {
 		t.Fatal("failed callback must leave the configuration unchanged")
-	}
-}
-
-func TestConfigRejectsInvalidObjects(t *testing.T) {
-	t.Setenv("PIPKIN_HOME", t.TempDir())
-	if err := os.MkdirAll(appDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, invalid := range []string{"null", "[]", "{broken", `{"salt":23}`} {
-		if err := os.WriteFile(configPath(), []byte(invalid), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := initializedConfig(); err == nil {
-			t.Fatal("invalid configuration must report an error")
-		}
-		if data, _ := os.ReadFile(configPath()); string(data) != invalid {
-			t.Fatal("invalid configuration must be left unchanged")
-		}
 	}
 }
 
@@ -218,5 +195,103 @@ func TestRelativeAppDirectoryIsResolved(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil || dir != filepath.Join(wd, "relative", "Pipkin Home") {
 		t.Fatal("relative overrides must resolve against the current directory")
+	}
+}
+
+func TestInstallRepairsMalformedConfigWithPrivateUniqueBackup(t *testing.T) {
+	for _, raw := range []string{"null", "[]", "{broken", `{"salt":23}`, `{"salt":"partial","port":23}`} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("PIPKIN_HOME", t.TempDir())
+			if err := os.WriteFile(configPath(), []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := initializedConfig(); err == nil {
+				t.Fatal("normal reads repaired malformed settings")
+			}
+			if data, _ := os.ReadFile(configPath()); string(data) != raw {
+				t.Fatal("invalid configuration must be left unchanged")
+			}
+			config, backup, err := initializedInstallConfig()
+			if err != nil || config.Salt == "" || config.Salt == "partial" || backup == "" {
+				t.Fatalf("repair did not initialize settings and retain a backup: %v", err)
+			}
+			data, err := os.ReadFile(backup)
+			if err != nil || string(data) != raw {
+				t.Fatal("backup did not retain the exact original bytes")
+			}
+			info, err := os.Stat(backup)
+			if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+				t.Fatal("backup was not private")
+			}
+			if read, err := initializedConfig(); err != nil || read != config {
+				t.Fatal("repaired settings cannot be read normally")
+			}
+			if err := os.WriteFile(configPath(), []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, second, err := initializedInstallConfig()
+			if err != nil || second == backup {
+				t.Fatal("a later repair overwrote an older backup")
+			}
+			if data, err := os.ReadFile(backup); err != nil || string(data) != raw {
+				t.Fatal("a later repair changed the earlier backup")
+			}
+		})
+	}
+}
+
+func TestInstallPreservesValidConfigAndUnknownFields(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	raw := []byte(`{"salt":"existing","port":"manual","future":{"large":9007199254740993}}`)
+	if err := os.WriteFile(configPath(), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initializedConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(configPath()); !bytes.Equal(data, raw) {
+		t.Fatal("reading an initialized configuration must leave its bytes unchanged")
+	}
+	config, backup, err := initializedInstallConfig()
+	if err != nil || backup != "" || config.Salt != "existing" || config.Port != "manual" {
+		t.Fatalf("valid configuration was repaired: %v", err)
+	}
+	data, err := os.ReadFile(configPath())
+	if err != nil || !bytes.Equal(data, raw) {
+		t.Fatal("install rewrote valid configuration")
+	}
+	backups, _ := filepath.Glob(filepath.Join(appDir(), "config.json.backup-*"))
+	if len(backups) != 0 {
+		t.Fatal("valid configuration acquired unnecessary backups")
+	}
+}
+
+func TestInstallDoesNotQuarantineUnreadableConfig(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	if err := os.Mkdir(configPath(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, backup, err := initializedInstallConfig(); err == nil || backup != "" {
+		t.Fatal("an unreadable path was treated as malformed settings")
+	}
+	if info, err := os.Stat(configPath()); err != nil || !info.IsDir() {
+		t.Fatal("unreadable configuration was replaced")
+	}
+}
+
+func TestInstallInitializationFailureLeavesOriginalConfigUnchanged(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	raw := []byte("{broken")
+	if err := os.WriteFile(configPath(), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A failing update after the backup must not replace the original settings.
+	want := errors.New("synthetic initialization failure")
+	_, backup, err := updateConfigWithRepair(func(*Config) error { return want }, true)
+	if !errors.Is(err, want) || backup == "" {
+		t.Fatal("repair lost the original callback failure or its backup")
+	}
+	if data, err := os.ReadFile(configPath()); err != nil || !bytes.Equal(data, raw) {
+		t.Fatal("failed initialization replaced the original settings")
 	}
 }

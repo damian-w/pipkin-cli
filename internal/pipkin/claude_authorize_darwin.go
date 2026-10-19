@@ -16,10 +16,8 @@ func authorizeClaudeKeychainWithNotice(ctx context.Context, notice func() error)
 	if !claudeDesktopSignedIn() {
 		return errors.New("Claude Desktop sign-in was not found. Open Claude and sign in, then run 'pipkin authorize'.")
 	}
-	if notice != nil {
-		if err := notice(); err != nil {
-			return err
-		}
+	if err := notice(); err != nil {
+		return err
 	}
 	secret, err := readClaudeSafeStorage(ctx, true)
 	clear(secret)

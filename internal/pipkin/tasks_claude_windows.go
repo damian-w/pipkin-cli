@@ -13,17 +13,12 @@ func ownedProcessInfo(pid int) (processIdentity, error) {
 		return processIdentity{}, err
 	}
 	defer windows.CloseHandle(process)
-	var token windows.Token
-	if err := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
-		return processIdentity{}, err
-	}
-	defer token.Close()
-	owner, err := token.GetTokenUser()
+	owner, err := processUserSID(process)
 	if err != nil {
 		return processIdentity{}, err
 	}
-	current, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil || !windows.EqualSid(owner.User.Sid, current.User.Sid) {
+	current, err := processUserSID(windows.CurrentProcess())
+	if err != nil || !owner.Equals(current) {
 		return processIdentity{}, errors.New("process owner is unavailable")
 	}
 	var created, exited, kernel, user windows.Filetime

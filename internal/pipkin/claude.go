@@ -73,7 +73,7 @@ func claudeDesktopDirs() []string {
 		packages, _ := filepath.Glob(filepath.Join(envOr("LOCALAPPDATA", filepath.Join(homeDir(), "AppData", "Local")), "Packages", "Claude_*", "LocalCache", "Roaming", "Claude"))
 		return append(dirs, packages...)
 	default:
-		return []string{filepath.Join(envOr("XDG_CONFIG_HOME", filepath.Join(homeDir(), ".config")), "Claude"), filepath.Join(envOr("XDG_CONFIG_HOME", filepath.Join(homeDir(), ".config")), "claude")}
+		return []string{filepath.Join(configHome(), "Claude"), filepath.Join(configHome(), "claude")}
 	}
 }
 

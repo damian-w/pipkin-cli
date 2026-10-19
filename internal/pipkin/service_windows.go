@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -158,11 +157,8 @@ func removeInstallation(target removalTarget) error {
 	}
 	// Wait for this executable to exit; LiteralPath avoids environment and wildcard expansion.
 	script := fmt.Sprintf("Wait-Process -Id %d -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '%s' -Recurse -Force", os.Getpid(), strings.ReplaceAll(tombstone, "'", "''"))
-	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true,
-		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NO_WINDOW}
-	if err := command.Start(); err != nil {
+	if err := spawnDetached("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script); err != nil {
 		return errors.Join(err, os.Rename(tombstone, target.dir))
 	}
-	return command.Process.Release()
+	return nil
 }

@@ -132,22 +132,7 @@ func TestUsageClientRefusesCredentialRedirect(t *testing.T) {
 	}
 }
 
-func TestStableIdentityAndServerBackoff(t *testing.T) {
-	isolate(t)
-	first, err := initializedConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := initializedConfig()
-	if err != nil || first.Salt == "" || second.Salt != first.Salt {
-		t.Fatal("usage and daemon need the same installation salt")
-	}
-	if err := os.WriteFile(configPath(), []byte("{broken"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := initializedConfig(); err == nil {
-		t.Fatal("corrupt config must not be overwritten")
-	}
+func TestServerBackoff(t *testing.T) {
 	for _, header := range []string{"1800", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)} {
 		response := &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{header}}}
 		var retry *usageRetryError

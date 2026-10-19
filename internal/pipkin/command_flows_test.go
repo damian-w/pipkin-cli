@@ -18,6 +18,8 @@ import (
 
 type flowTestLock struct{ closed bool }
 
+func (lock *flowTestLock) Close() error { lock.closed = true; return nil }
+
 func TestCommandPhaseErrorKeepsCauseAndSeparatesSafeDetails(t *testing.T) {
 	want := errors.New("synthetic service failure\x1b[31m\n" + strings.Repeat("detail ", 30))
 	err := commandPhaseError{message: "Pipkin couldn't start. Check the details below.", cause: want}
@@ -30,8 +32,6 @@ func TestCommandPhaseErrorKeepsCauseAndSeparatesSafeDetails(t *testing.T) {
 		}
 	}
 }
-
-func (lock *flowTestLock) Close() error { lock.closed = true; return nil }
 
 func TestInstallFlowSummarizesAfterActivationAndUsesExactPATHHint(t *testing.T) {
 	for _, denied := range []bool{false, true} {
