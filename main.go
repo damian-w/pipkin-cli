@@ -6,7 +6,7 @@ import (
 	"github.com/damian-w/pipkin-cli/internal/pipkin"
 )
 
-var version = "2.0.2"
+var version = "2.0.3"
 
 //go:embed LICENSE
 var licenseText string
