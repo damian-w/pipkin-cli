@@ -305,7 +305,8 @@ func TestCommandHintPowerShellArgumentsPreserveExactPaths(t *testing.T) {
 	for _, value := range values {
 		script.WriteString("[Console]::Write(" + powerShellQuote(value) + ");[Console]::Write([char]0);")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// PowerShell can take over 15 seconds to start cold on CI runners.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, powerShell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script.String())
 	data, err := command.Output()
