@@ -79,17 +79,15 @@ func cliCommands(buildVersion, licenseText, notices, goos string, output io.Writ
 }
 
 func jsonOption(options []string) error {
-	if len(options) == 0 || len(options) == 1 && options[0] == "--json" {
-		return nil
-	}
-	bad := options[0]
-	if bad == "--json" && len(options) > 1 {
-		bad = options[1]
-		if bad == "--json" {
+	for i, option := range options {
+		if option != "--json" {
+			return invalidCLIOption(option)
+		}
+		if i > 0 {
 			return &cliOptionError{"--json can only be used once"}
 		}
 	}
-	return invalidCLIOption(bad)
+	return nil
 }
 
 // Service managers start the helper with the installation directory it was registered for.
@@ -125,9 +123,10 @@ func formatCLIUsage(buildVersion string, commands []cliCommand) string {
 
 func dispatch(args []string, buildVersion string, commands []cliCommand, output io.Writer) (int, error) {
 	menu := formatCLIUsage(buildVersion, commands)
+	isHelp := func(name string) bool { return name == "help" || name == "-h" || name == "--help" }
 	if len(args) == 0 {
-		if dir, err := resolvedAppDir(); err == nil {
-			if installed, err := pathExists(filepath.Join(dir, "bin", executableName("pipkin"))); err == nil && installed {
+		if _, err := resolvedAppDir(); err == nil {
+			if installed, err := pathExists(installedBinary()); err == nil && installed {
 				if index := slices.IndexFunc(commands, func(command cliCommand) bool { return command.name == "status" }); index >= 0 {
 					if err := commands[index].run(nil); err != nil {
 						return cliResult(err)
@@ -137,23 +136,18 @@ func dispatch(args []string, buildVersion string, commands []cliCommand, output 
 				}
 			}
 		}
-		_, err := io.WriteString(output, menu)
-		return cliResult(err)
+		args = []string{"help"}
 	}
 	name := args[0]
-	if name == "help" || name == "-h" || name == "--help" {
-		if len(args) == 1 {
-			_, err := io.WriteString(output, menu)
-			return cliResult(err)
-		}
-		if len(args) != 2 {
+	if isHelp(name) {
+		if len(args) > 2 {
 			return 1, errors.New("usage: pipkin help [command]")
 		}
-		name, args = args[1], []string{args[1], "--help"}
-		if name == "help" || name == "-h" || name == "--help" {
+		if len(args) == 1 || isHelp(args[1]) {
 			_, err := io.WriteString(output, menu)
 			return cliResult(err)
 		}
+		name, args = args[1], []string{args[1], "--help"}
 	}
 	index := slices.IndexFunc(commands, func(command cliCommand) bool { return command.name == name })
 	if index < 0 {

@@ -13,19 +13,16 @@ import (
 
 const outputTestNow int64 = 1767225600
 
-func outputTestFloat(value float64) *float64 { return &value }
-func outputTestInt(value int64) *int64       { return &value }
-
 func TestOutputProvidersGoldenAndUnchanged(t *testing.T) {
 	s := Status{States: map[string]string{"codex": "available", "claude": "available"}, Readings: map[string]*Reading{
 		"codex": {Account: "invented-private-account", Source: "invented-private-source", Plan: "sample_plan", Observed: outputTestNow,
 			SessionNoCap: true, Weekly: &Window{Used: 250, Reset: outputTestNow + 7*86400},
 			Models:  map[string]*Window{"future_model_session": nil, "codex_spark_weekly": {Used: 800, Reset: outputTestNow + 2*86400}},
-			Credits: &Credits{Balance: outputTestFloat(123.45)}, ReportsBanked: true, Banked: outputTestInt(0)},
+			Credits: &Credits{Balance: new(123.45)}, ReportsBanked: true, Banked: new(int64(0))},
 		"claude": {Plan: "sample_team", Observed: outputTestNow - 6*60,
 			Session: &Window{Used: 185, Reset: outputTestNow + 36*60}, Weekly: &Window{Used: 400, Reset: outputTestNow + 3*86400 + 5*3600},
 			Models:     map[string]*Window{"sonnet": {Used: 0, Reset: outputTestNow + 86400}, "opus": {Used: 100, Reset: outputTestNow + 86400}},
-			ExtraUsage: &ExtraUsage{Enabled: true, Used: outputTestFloat(12.5), Limit: outputTestFloat(50), Currency: "USD"}, ReportsBanked: true},
+			ExtraUsage: &ExtraUsage{Enabled: true, Used: new(12.5), Limit: new(50.0), Currency: "USD"}, ReportsBanked: true},
 	}}
 	before, err := json.Marshal(s)
 	if err != nil {
@@ -110,13 +107,13 @@ func TestOutputDetailsKeepZeroAndUnknownDistinct(t *testing.T) {
 		reading *Reading
 		want    []string
 	}{
-		{"reported zeros", &Reading{ReportsBanked: true, Banked: outputTestInt(0), Credits: &Credits{Balance: outputTestFloat(0)}, ExtraUsage: &ExtraUsage{Enabled: true, Used: outputTestFloat(0), Limit: outputTestFloat(0), Currency: "USD"}}, []string{"Credits        0.00", "Extra usage    0.00 of 0.00 USD used", "Banked resets  0"}},
+		{"reported zeros", &Reading{ReportsBanked: true, Banked: new(int64(0)), Credits: &Credits{Balance: new(0.0)}, ExtraUsage: &ExtraUsage{Enabled: true, Used: new(0.0), Limit: new(0.0), Currency: "USD"}}, []string{"Credits        0.00", "Extra usage    0.00 of 0.00 USD used", "Banked resets  0"}},
 		{"unknown amounts", &Reading{ReportsBanked: true, Credits: &Credits{}, ExtraUsage: &ExtraUsage{Enabled: true}}, []string{"Credits        Unknown", "Extra usage    On; spend unknown", "Banked resets  Unknown", "Session        Unknown", "Weekly         Unknown"}},
-		{"nonfinite amounts", &Reading{Credits: &Credits{Balance: outputTestFloat(math.NaN())}, ExtraUsage: &ExtraUsage{Enabled: true, Used: outputTestFloat(math.Inf(1)), Limit: outputTestFloat(25), Currency: "EUR"}}, []string{"Credits      Unknown", "Spend unknown; limit 25.00 EUR"}},
+		{"nonfinite amounts", &Reading{Credits: &Credits{Balance: new(math.NaN())}, ExtraUsage: &ExtraUsage{Enabled: true, Used: new(math.Inf(1)), Limit: new(25.0), Currency: "EUR"}}, []string{"Credits      Unknown", "Spend unknown; limit 25.00 EUR"}},
 		{"unlimited credits", &Reading{Credits: &Credits{Unlimited: true}}, []string{"Credits  Unlimited"}},
 		{"extra off", &Reading{ExtraUsage: &ExtraUsage{}}, []string{"Extra usage  Off"}},
-		{"known spend unknown limit", &Reading{ExtraUsage: &ExtraUsage{Enabled: true, Used: outputTestFloat(3.5), Currency: "USD"}}, []string{"3.50 USD used; limit unknown"}},
-		{"invalid banked amount", &Reading{ReportsBanked: true, Banked: outputTestInt(-1)}, []string{"Banked resets  Unknown"}},
+		{"known spend unknown limit", &Reading{ExtraUsage: &ExtraUsage{Enabled: true, Used: new(3.5), Currency: "USD"}}, []string{"3.50 USD used; limit unknown"}},
+		{"invalid banked amount", &Reading{ReportsBanked: true, Banked: new(int64(-1))}, []string{"Banked resets  Unknown"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var got bytes.Buffer
@@ -136,7 +133,7 @@ func TestOutputSanitizesAndWrapsEveryProviderString(t *testing.T) {
 	longLabel := strings.Repeat("z", 150)
 	injection := "\x1b[2J\n\r\t\x7f\u009b\u202e模型"
 	s := Status{States: map[string]string{"codex": "unavailable"}, CodexError: strings.Repeat("Long actionable message ", 8) + injection,
-		Readings: map[string]*Reading{"codex": {Plan: "raw_plan-slug" + injection, Models: map[string]*Window{longLabel + injection: nil}, ExtraUsage: &ExtraUsage{Enabled: true, Used: outputTestFloat(1), Currency: "USD" + injection}}}}
+		Readings: map[string]*Reading{"codex": {Plan: "raw_plan-slug" + injection, Models: map[string]*Window{longLabel + injection: nil}, ExtraUsage: &ExtraUsage{Enabled: true, Used: new(1.0), Currency: "USD" + injection}}}}
 	var got bytes.Buffer
 	if err := writeProviders(&got, s, outputTestNow, true); err != nil {
 		t.Fatal(err)

@@ -76,6 +76,20 @@ func statusCommandTo(args []string, out io.Writer) error {
 	return writeStatus(out, view, time.Now().Unix(), runtime.GOOS)
 }
 
+func statusJSONTo(out io.Writer) error {
+	var status Status
+	if err := readJSON(statusPath(), &status); err != nil {
+		return errors.New("no helper snapshot yet; run `pipkin usage --json` for a fresh read")
+	}
+	pid, err := runningPID()
+	if err != nil {
+		return err
+	}
+	status.PID = pid
+	status.Tasks = readableTaskSnapshot(status.Tasks, pid != 0, time.Now())
+	return printJSONTo(out, status)
+}
+
 func writeStatus(out io.Writer, view statusView, now int64, goos string) error {
 	switch {
 	case view.starting:

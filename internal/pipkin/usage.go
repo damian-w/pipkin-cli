@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -16,6 +15,13 @@ import (
 )
 
 var errSignedOut = errors.New("no existing sign-in found")
+
+// signedOutError is a sign-out with a user-facing message.
+type signedOutError string
+
+func (e signedOutError) Error() string { return string(e) }
+
+func (e signedOutError) Is(target error) bool { return target == errSignedOut }
 
 // Never forward an existing app credential across a redirect, even on the same host.
 var usageHTTPClient = &http.Client{Timeout: 20 * time.Second,
@@ -123,6 +129,50 @@ func (s Status) providerError(provider string) string {
 	return ""
 }
 
+type usageDependencies struct {
+	now              func() time.Time
+	config           func() (Config, error)
+	collect          func(context.Context, string, string) providerResult
+	progressTerminal bool
+}
+
+func runUsage(ctx context.Context, jsonOutput bool, out, progress io.Writer, deps usageDependencies) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	now := deps.now()
+	config, err := deps.config()
+	if err != nil {
+		return err
+	}
+	if !jsonOutput && deps.progressTerminal {
+		if _, err := fmt.Fprintln(progress, "Checking Codex and Claude..."); err != nil {
+			return err
+		}
+	}
+	results := make(chan providerResult, len(providers))
+	for _, provider := range providers {
+		go func() { results <- deps.collect(ctx, provider, config.Salt) }()
+	}
+	status := Status{SchemaVersion: 1, States: map[string]string{}, Version: version, Readings: map[string]*Reading{}, Updated: now.Unix()}
+	messages := map[string]string{}
+	for range providers {
+		select {
+		case result := <-results:
+			status.Readings[result.provider] = result.reading
+			status.States[result.provider] = providerState(result.err)
+			messages[result.provider] = providerMessage(result.err)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	status.CodexError, status.ClaudeError = messages["codex"], messages["claude"]
+	if jsonOutput {
+		return printJSONTo(out, status)
+	}
+	return writeProviders(out, status, deps.now().Unix(), true)
+}
+
 func usageCommandTo(args []string, out, progress io.Writer) error {
 	return runUsage(context.Background(), len(args) == 1, out, progress, usageDependencies{
 		now: time.Now, config: initializedConfig, collect: collectProvider,
@@ -134,23 +184,4 @@ func printJSONTo(out io.Writer, value any) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
-}
-
-func statusJSONTo(out io.Writer) error {
-	var status Status
-	if err := readJSON(statusPath(), &status); err != nil {
-		return errors.New("no helper snapshot yet; run `pipkin usage --json` for a fresh read")
-	}
-	pid, err := runningPID()
-	if err != nil {
-		return err
-	}
-	status.PID = pid
-	status.Tasks = readableTaskSnapshot(status.Tasks, pid != 0, time.Now())
-	return printJSONTo(out, status)
-}
-
-func authorizeCommand() error {
-	return runAuthorize(context.Background(), runtime.GOOS, os.Getenv("PIPKIN_AUTHORIZE_NESTED") == "1", os.Stdout,
-		authorizeDependencies{authorize: authorizeClaudeKeychainWithNotice, running: runningPID, restart: restartCommand})
 }

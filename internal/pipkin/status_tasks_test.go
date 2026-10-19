@@ -73,7 +73,7 @@ func TestStatusTasksDoNotReviveStaleStoppedStartingOrUnsupportedData(t *testing.
 
 func TestStatusTaskSummaryPropagatesWriterFailures(t *testing.T) {
 	tasks := &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{"codex": {Coverage: "partial", Tasks: []Task{{ID: "one", Status: "idle"}}}}}
-	if err := writeTaskStatusSummary(failingCLIWriter{}, tasks, testNow); !errors.Is(err, io.ErrClosedPipe) {
+	if err := writeTaskStatusSummary(&outputTestWriter{err: io.ErrClosedPipe}, tasks, testNow); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal("summary hid writer failure")
 	}
 }

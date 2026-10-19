@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,12 +48,7 @@ func installCommand() error {
 }
 
 func onPath(folder string) bool {
-	for _, entry := range filepath.SplitList(os.Getenv("PATH")) {
-		if entry == folder {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(filepath.SplitList(os.Getenv("PATH")), folder)
 }
 
 func terminalText(value string) string {
@@ -139,14 +135,6 @@ func restartHelper(stop, start func() error) error {
 	return nil
 }
 
-func authorizeInstalledHelper() {
-	authorizeInstalledHelperFor(runtime.GOOS, claudeDesktopSignedIn, (*exec.Cmd).Run, os.Stdout)
-}
-
-func authorizeInstalledHelperFor(goos string, signedIn func() bool, run func(*exec.Cmd) error, output io.Writer) {
-	authorizeInstalledHelperWithNoticeFor(goos, signedIn, run, output, output)
-}
-
 func authorizeInstalledHelperWithNoticeFor(goos string, signedIn func() bool, run func(*exec.Cmd) error, noticeOut, warningOut io.Writer) {
 	if goos != "darwin" || !signedIn() {
 		return
@@ -161,8 +149,6 @@ func authorizeInstalledHelperWithNoticeFor(goos string, signedIn func() bool, ru
 		fmt.Fprintf(warningOut, "Pipkin can't read Claude's sign-in yet. Run %s.\n", commandHint("authorize"))
 	}
 }
-
-var httpClient = &http.Client{Timeout: 60 * time.Second}
 
 func latestTag() (string, error) {
 	client := &http.Client{Timeout: 30 * time.Second,
@@ -220,8 +206,8 @@ func updateCommand() error {
 		},
 		config: initializedConfig, actions: helperInstallationActions(), activate: activateBinaries,
 		authorize: authorizeReplacement,
-		advisory: func(out io.Writer) error {
-			return writeFirmwareAdvisory(out, cachedDisplayFirmware, latestFirmwareAdvisoryTag, commandHint)
+		advisory: func(out io.Writer) {
+			writeFirmwareAdvisory(out, cachedDisplayFirmware, latestFirmwareAdvisoryTag, commandHint)
 		},
 	})
 }

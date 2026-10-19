@@ -13,8 +13,6 @@ import (
 
 const testNow = 1800000000
 
-func float(value float64) *float64 { return &value }
-
 func isolate(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -125,9 +123,8 @@ func TestNewerVersion(t *testing.T) {
 // Set UPDATE_FIXTURES=1 to regenerate the firmware's protocol fixture.
 func TestProtocolFixture(t *testing.T) {
 	h, lines := testHelper()
-	banked := int64(0)
 	h.readings["codex"] = &Reading{Account: "codex", Observed: testNow, ReportsBanked: true,
-		Banked: &banked, SessionNoCap: true, Weekly: &Window{Used: 1000, Reset: testNow + 526000, Seconds: 604800}}
+		Banked: new(int64(0)), SessionNoCap: true, Weekly: &Window{Used: 1000, Reset: testNow + 526000, Seconds: 604800}}
 	h.readings["claude"] = &Reading{Account: "claude", Observed: testNow,
 		Session: &Window{Used: 235, Reset: testNow + 3600, Seconds: 18000},
 		Weekly:  &Window{Used: 412, Reset: testNow + 90000, Seconds: 604800}}

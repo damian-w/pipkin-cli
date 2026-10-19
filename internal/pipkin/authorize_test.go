@@ -59,7 +59,7 @@ func TestAuthorizeFailuresKeepCauseAndAvoidRestart(t *testing.T) {
 		case "permission":
 			deps.authorize = func(context.Context, func() error) error { return want }
 		case "output":
-			out, expected = failingCLIWriter{}, io.ErrClosedPipe
+			out, expected = &outputTestWriter{err: io.ErrClosedPipe}, io.ErrClosedPipe
 		case "running":
 			deps.running = func() (int, error) { return 0, want }
 		case "restart":

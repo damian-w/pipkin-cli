@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"runtime"
 )
 
 type authorizeDependencies struct {
@@ -42,4 +44,9 @@ func runAuthorize(ctx context.Context, goos string, nested bool, out io.Writer, 
 		}
 	}
 	return nil
+}
+
+func authorizeCommand() error {
+	return runAuthorize(context.Background(), runtime.GOOS, os.Getenv("PIPKIN_AUTHORIZE_NESTED") == "1", os.Stdout,
+		authorizeDependencies{authorize: authorizeClaudeKeychainWithNotice, running: runningPID, restart: restartCommand})
 }

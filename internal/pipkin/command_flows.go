@@ -43,7 +43,7 @@ type updateCommandDeps struct {
 	actions      installationActions
 	activate     func(*stagedBinaries, installationActions) (string, error)
 	authorize    func(io.Writer, io.Writer)
-	advisory     func(io.Writer) error
+	advisory     func(io.Writer)
 }
 
 func commandLockError(action string, err error) error {
@@ -53,25 +53,22 @@ func commandLockError(action string, err error) error {
 	} else if !errors.Is(err, os.ErrPermission) {
 		message = "Couldn't " + action + " Pipkin. Try again."
 	}
-	return commandFlowError{message: message, cause: err}
+	return commandPhaseError{message: message, cause: err, quiet: true}
 }
-
-type commandFlowError struct {
-	message string
-	cause   error
-}
-
-func (e commandFlowError) Error() string { return e.message }
-func (e commandFlowError) Unwrap() error { return e.cause }
 
 // commandPhaseError puts the outcome first and the technical cause after it.
+// A quiet error shows only the outcome.
 type commandPhaseError struct {
 	message string
 	cause   error
+	quiet   bool
 }
 
 func (e commandPhaseError) Unwrap() error { return e.cause }
 func (e commandPhaseError) Error() string {
+	if e.quiet {
+		return e.message
+	}
 	var text bytes.Buffer
 	_ = writeOutputLine(&text, "", e.message)
 	_ = writeOutputLine(&text, "Details: ", e.cause.Error())
@@ -150,7 +147,7 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 	if err != nil {
 		var network *url.Error
 		if errors.As(err, &network) {
-			return commandFlowError{message: "Couldn't reach GitHub to check for updates. Check your internet connection.", cause: err}
+			return commandPhaseError{message: "Couldn't reach GitHub to check for updates. Check your internet connection.", cause: err, quiet: true}
 		}
 		return commandPhaseError{message: "Couldn't check for Pipkin updates. Try again later.", cause: err}
 	}
@@ -158,7 +155,7 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 		if _, err := fmt.Fprintf(out, "Pipkin %s is up to date.\n", deps.buildVersion); err != nil {
 			return err
 		}
-		_ = deps.advisory(out)
+		deps.advisory(out)
 		return nil
 	}
 	lock, err := deps.lock()
@@ -189,7 +186,7 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 		return lines.err
 	}
 	// Firmware advice is optional and never fails an update.
-	_ = deps.advisory(out)
+	deps.advisory(out)
 	return nil
 }
 
@@ -288,19 +285,18 @@ func latestFirmwareAdvisoryTag(ctx context.Context) (string, error) {
 	return release.Tag, err
 }
 
-func writeFirmwareAdvisory(out io.Writer, saved func() (string, error), latest func(context.Context) (string, error), hint func(...string) string) error {
+func writeFirmwareAdvisory(out io.Writer, saved func() (string, error), latest func(context.Context) (string, error), hint func(...string) string) {
 	current, err := saved()
 	if err != nil || !stableFirmwareVersion.MatchString(current) {
-		return nil
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	tag, err := latest(ctx)
 	if err != nil || !stableFirmwareVersion.MatchString(tag) || !newerVersion(tag, current) {
-		return nil
+		return
 	}
-	_, err = fmt.Fprintf(out, "Display firmware %s is available (yours is %s). To install it, run: %s\n", strings.TrimPrefix(tag, "v"), strings.TrimPrefix(current, "v"), hint("flash"))
-	return err
+	fmt.Fprintf(out, "Display firmware %s is available (yours is %s). To install it, run: %s\n", strings.TrimPrefix(tag, "v"), strings.TrimPrefix(current, "v"), hint("flash"))
 }
 
 func cachedDisplayFirmware() (string, error) {
@@ -308,13 +304,9 @@ func cachedDisplayFirmware() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var status struct {
-		Device struct {
-			Firmware string `json:"firmware"`
-		} `json:"device"`
-	}
+	var status Status
 	if err := json.Unmarshal(data, &status); err != nil {
 		return "", err
 	}
-	return status.Device.Firmware, nil
+	return status.Device["firmware"], nil
 }

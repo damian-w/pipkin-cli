@@ -16,7 +16,7 @@ func TestTasksMinimalJSONAndUnknownCounts(t *testing.T) {
 	collect := func(context.Context) TaskSnapshot {
 		return TaskSnapshot{SchemaVersion: 1, ObservedAt: now.Unix(), Providers: map[string]TaskProvider{
 			"claude": {Coverage: "unavailable"},
-			"codex":  {Coverage: "partial", Tasks: []Task{{ID: "codex:example", UpdatedAt: &[]int64{now.Unix()}[0], Status: "needs_attention"}}},
+			"codex":  {Coverage: "partial", Tasks: []Task{{ID: "codex:example", UpdatedAt: new(now.Unix()), Status: "needs_attention"}}},
 		}}
 	}
 	var out bytes.Buffer
@@ -97,7 +97,7 @@ func TestTaskCollectorsAreIndependentAndCancellationIsUnknown(t *testing.T) {
 func TestTaskOutputReportsWriterErrors(t *testing.T) {
 	collect := func(context.Context) TaskSnapshot { return TaskSnapshot{} }
 	for _, jsonOutput := range []bool{false, true} {
-		if err := runTasks(context.Background(), jsonOutput, failingCLIWriter{}, collect); !errors.Is(err, io.ErrClosedPipe) {
+		if err := runTasks(context.Background(), jsonOutput, &outputTestWriter{err: io.ErrClosedPipe}, collect); !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("writer error lost: %v", err)
 		}
 	}

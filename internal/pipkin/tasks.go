@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -42,13 +41,6 @@ type TaskSnapshot struct {
 	ObservedAt    int64                   `json:"observed_at"`
 	Providers     map[string]TaskProvider `json:"providers"`
 }
-
-const tasksHelp = `
-Reads tasks from the Claude and Codex desktop apps on macOS and Windows.
-Pipkin may not see every task.
-
-  --json  Print each task's status as JSON
-`
 
 func taskOpaqueID(provider, rawID string) string {
 	digest := sha256.Sum256([]byte(provider + "\x00" + rawID))
@@ -145,9 +137,7 @@ func runTasks(ctx context.Context, jsonOutput bool, out io.Writer, collect func(
 		return err
 	}
 	if jsonOutput {
-		encoder := json.NewEncoder(out)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(snapshot)
+		return printJSONTo(out, snapshot)
 	}
 	for _, provider := range taskProviders {
 		summary := taskSummary(snapshot.Providers[provider.key])

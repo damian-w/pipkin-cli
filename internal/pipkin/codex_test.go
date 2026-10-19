@@ -191,14 +191,16 @@ func TestCodexRequestKeepsCredentialsPrivate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"tokens":{"access_token":"private-token","account_id":"private-account"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
+	calls := 0
 	stubUsageHTTP(t, func(req *http.Request) *http.Response {
+		calls++
 		if req.URL.String() != codexUsageURL || req.Method != http.MethodGet || req.Header.Get("Authorization") != "Bearer private-token" || req.Header.Get("ChatGPT-Account-Id") != "private-account" {
 			t.Fatal("credential request destination or headers incorrect")
 		}
 		return testResponse(req, http.StatusUnauthorized, `{"error":"private-token private-account"}`)
 	})
 	_, err := fetchCodexUsage(context.Background(), "test-salt")
-	if !errors.Is(err, errSignedOut) || strings.Contains(err.Error(), "private") {
+	if calls != 1 || !errors.Is(err, errSignedOut) || err.Error() != "Sign-in expired. Open Codex to sign in again." {
 		t.Fatal("expired sign-in must be identifiable without exposing provider body")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "auth.json"))

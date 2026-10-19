@@ -3,6 +3,7 @@ package pipkin
 import (
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -89,7 +90,7 @@ func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 			out.line("", "")
 		}
 		reading := s.Readings[provider.key]
-		message := outputProviderMessage(s.providerError(provider.key))
+		message := strings.TrimSpace(outputASCII(s.providerError(provider.key)))
 		state := s.States[provider.key]
 		heading := provider.name
 		if detailed && reading != nil && strings.TrimSpace(reading.Plan) != "" && state != "signed_out" {
@@ -120,39 +121,14 @@ func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 			}
 			out.line("  ", note)
 		}
-		labels := []string{"Session", "Weekly"}
-		models := make([]string, 0, len(reading.Models))
-		if detailed {
-			for model := range reading.Models {
-				models = append(models, model)
-			}
-			slices.Sort(models)
-			for _, model := range models {
-				labels = append(labels, outputModelLabel(model))
-			}
-			if reading.Credits != nil {
-				labels = append(labels, "Credits")
-			}
-			if reading.ExtraUsage != nil {
-				labels = append(labels, "Extra usage")
-			}
-			if reading.ReportsBanked || reading.Banked != nil {
-				labels = append(labels, "Banked resets")
-			}
-		}
-		width := 0
-		for _, label := range labels {
-			width = max(width, min(len(outputASCII(label)), 24))
-		}
 		session := outputWindow(reading.Session, now)
 		if reading.SessionNoCap {
 			session = "No session cap"
 		}
-		out.row("Session", session, width)
-		out.row("Weekly", outputWindow(reading.Weekly, now), width)
+		rows := [][2]string{{"Session", session}, {"Weekly", outputWindow(reading.Weekly, now)}}
 		if detailed {
-			for _, model := range models {
-				out.row(outputModelLabel(model), outputWindow(reading.Models[model], now), width)
+			for _, model := range slices.Sorted(maps.Keys(reading.Models)) {
+				rows = append(rows, [2]string{outputModelLabel(model), outputWindow(reading.Models[model], now)})
 			}
 			if reading.Credits != nil {
 				value := "Unknown"
@@ -161,18 +137,25 @@ func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 				} else if outputAmountKnown(reading.Credits.Balance) {
 					value = fmt.Sprintf("%.2f", *reading.Credits.Balance)
 				}
-				out.row("Credits", value, width)
+				rows = append(rows, [2]string{"Credits", value})
 			}
 			if reading.ExtraUsage != nil {
-				out.row("Extra usage", outputExtraUsage(reading.ExtraUsage), width)
+				rows = append(rows, [2]string{"Extra usage", outputExtraUsage(reading.ExtraUsage)})
 			}
 			if reading.ReportsBanked || reading.Banked != nil {
 				value := "Unknown"
 				if reading.Banked != nil && *reading.Banked >= 0 {
 					value = fmt.Sprint(*reading.Banked)
 				}
-				out.row("Banked resets", value, width)
+				rows = append(rows, [2]string{"Banked resets", value})
 			}
+		}
+		width := 0
+		for _, row := range rows {
+			width = max(width, min(len(outputASCII(row[0])), 24))
+		}
+		for _, row := range rows {
+			out.row(row[0], row[1], width)
 		}
 		if !failed && reading.Observed > 0 && reading.Observed <= now && now-reading.Observed >= 5*60 {
 			out.line("  ", "Last reading "+outputDuration(now-reading.Observed)+" ago")
@@ -192,10 +175,6 @@ func outputCalmSignOut(message string) bool {
 		return true
 	}
 	return false
-}
-
-func outputProviderMessage(message string) string {
-	return strings.TrimSpace(outputASCII(message))
 }
 
 func outputHasReading(reading *Reading) bool {

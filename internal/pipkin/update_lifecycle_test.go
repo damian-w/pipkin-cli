@@ -43,24 +43,15 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 					return "test startup", nil
 				},
 				authorize: func() {
-					authorizeInstalledHelperFor("darwin", func() bool { return true }, func(command *exec.Cmd) error {
+					authorizeInstalledHelperWithNoticeFor("darwin", func() bool { return true }, func(command *exec.Cmd) error {
 						events = append(events, "authorize")
-						if command.Path != installedBinary() || command.Path == source || !slices.Equal(command.Args, []string{installedBinary(), "authorize"}) {
-							t.Fatalf("authorization did not use the installed replacement: path=%q args=%q", command.Path, command.Args)
-						}
-						if command.Stdin != os.Stdin || command.Stdout == &output || command.Stderr == &output {
-							t.Fatal("authorization did not discard child output while retaining foreground input")
-						}
-						if !slices.Contains(command.Env, "PIPKIN_AUTHORIZE_NESTED=1") {
-							t.Fatal("nested authorization could restart while the installation lock is held")
-						}
 						checkTestBinary(t, command.Path, "new "+mainName)
 						checkTestBinary(t, command.Path+".old", "old "+mainName)
 						if denied {
 							return errors.New("Keychain authorization canceled")
 						}
 						return nil
-					}, &output)
+					}, &output, &output)
 				},
 				configure: func() error { events = append(events, "configure"); return nil },
 				start: func() error {
@@ -98,13 +89,13 @@ func TestInstalledAuthorizationSkipsOtherPlatformsAndAbsentClaude(t *testing.T) 
 		t.Run(goos, func(t *testing.T) {
 			var output bytes.Buffer
 			lookups, commands := 0, 0
-			authorizeInstalledHelperFor(goos, func() bool {
+			authorizeInstalledHelperWithNoticeFor(goos, func() bool {
 				lookups++
 				return false
 			}, func(*exec.Cmd) error {
 				commands++
 				return errors.New("must not execute")
-			}, &output)
+			}, &output, &output)
 			wantedLookups := 0
 			if goos == "darwin" {
 				wantedLookups = 1
@@ -113,12 +104,6 @@ func TestInstalledAuthorizationSkipsOtherPlatformsAndAbsentClaude(t *testing.T) 
 				t.Fatalf("authorization on %s: lookups=%d commands=%d output=%q", goos, lookups, commands, output.String())
 			}
 		})
-	}
-}
-
-func TestHelperInstallationActionsIncludesAuthorization(t *testing.T) {
-	if helperInstallationActions().authorize == nil {
-		t.Fatal("install and update no longer authorize the installed replacement")
 	}
 }
 

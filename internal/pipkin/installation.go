@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -100,6 +101,8 @@ func stageLocalBinaries(source, target, goos, goarch string) (_ *stagedBinaries,
 	}
 	return staged, nil
 }
+
+var httpClient = &http.Client{Timeout: 60 * time.Second}
 
 func downloadTo(url string, writer io.Writer, limit int64) error {
 	request, err := http.NewRequest(http.MethodGet, url, nil)
@@ -281,7 +284,7 @@ type installationActions struct {
 
 func helperInstallationActions() installationActions {
 	return installationActions{running: runningPID, stop: stopHelper, start: startHelper,
-		register: registerAutostart, snapshot: snapshotAutostart, authorize: authorizeInstalledHelper}
+		register: registerAutostart, snapshot: snapshotAutostart}
 }
 
 func activateBinaries(staged *stagedBinaries, actions installationActions) (string, error) {

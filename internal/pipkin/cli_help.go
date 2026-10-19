@@ -12,6 +12,13 @@ Running 'pipkin' on its own shows the same view.
   --json  Print the saved status as JSON
 `
 
+const tasksHelp = `
+Reads tasks from the Claude and Codex desktop apps on macOS and Windows.
+Pipkin may not see every task.
+
+  --json  Print each task's status as JSON
+`
+
 const usageHelp = `
 Includes model limits, credits and extra usage when available.
 
@@ -61,7 +68,6 @@ Guide: github.com/damian-w/pipkin-cli/blob/main/docs/firmware.md
 type cliOptionError struct{ message string }
 
 func (e *cliOptionError) Error() string { return e.message }
-func (e *cliOptionError) Unwrap() error { return errUsage }
 
 func invalidCLIOption(value string) error {
 	label := "unexpected argument"

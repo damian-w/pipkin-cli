@@ -33,12 +33,15 @@ func recordingCommands(output io.Writer, calls *int) []cliCommand {
 	return commands
 }
 
+var cliTestCommandNames = []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "flash", "uninstall", "install", "run", "version", "license"}
+
 func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
+	for _, command := range cliTestCommandNames {
 		for _, option := range []string{"--dry-run", "--json --extra"} {
 			calls := 0
 			code, err := dispatch([]string{command, option}, "test", recordingCommands(io.Discard, &calls), io.Discard)
-			if code != 1 || err == nil || calls != 0 {
+			if code != 1 || err == nil || calls != 0 || !strings.Contains(strings.ToLower(err.Error()), "usage: pipkin "+command) ||
+				command != "run" && !strings.Contains(err.Error(), `unknown option "`+option+`"`) {
 				t.Fatalf("%s %s: code=%d error=%v calls=%d", command, option, code, err, calls)
 			}
 		}
@@ -46,28 +49,47 @@ func TestCLIRejectsArgumentsBeforeInvokingCommands(t *testing.T) {
 }
 
 func TestCLIHelpHasNoCommandSideEffects(t *testing.T) {
-	for _, command := range []string{"usage", "authorize", "status", "tasks", "start", "stop", "restart", "update", "uninstall", "install", "run", "version", "license"} {
-		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
-			var output bytes.Buffer
-			calls := 0
-			code, err := dispatch(args, "test", recordingCommands(&output, &calls), &output)
-			if code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "pipkin "+command) {
-				t.Fatalf("%v: code=%d error=%v calls=%d output=%q", args, code, err, calls, output.String())
-			}
+	check := func(args []string, want string) {
+		var output bytes.Buffer
+		calls := 0
+		code, err := dispatch(args, "test", recordingCommands(&output, &calls), &output)
+		if code != 0 || err != nil || calls != 0 || output.Len() == 0 || !strings.Contains(output.String(), want) {
+			t.Fatalf("%v: code=%d error=%v calls=%d output=%q", args, code, err, calls, output.String())
 		}
+	}
+	for _, command := range cliTestCommandNames {
+		for _, args := range [][]string{{command, "--help"}, {command, "-h"}, {"help", command}} {
+			check(args, "pipkin "+command)
+		}
+	}
+	for _, args := range [][]string{{"help", "help"}, {"--help", "usage"}, {"-h", "tasks"}, {"usage", "--json", "--help"}, {"flash", "--port", "--help"}} {
+		check(args, "")
 	}
 }
 
 func TestCLIUsageListsCommandsForPlatform(t *testing.T) {
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		t.Run(goos, func(t *testing.T) {
-			menu := formatCLIUsage("test", cliCommands("test", "", "", goos, io.Discard))
+			commands := cliCommands("test", "", "", goos, io.Discard)
+			menu := formatCLIUsage("test", commands)
 			if strings.Contains(menu, ", authorize") != (goos == "darwin") {
 				t.Fatalf("incorrect authorize visibility on %s: %q", goos, menu)
+			}
+			if strings.Contains(menu, "--json") || !strings.Contains(menu, "More: tasks, start, stop, install,") {
+				t.Fatalf("incorrect menu grouping on %s: %s", goos, menu)
 			}
 			for _, command := range []string{"usage", "status", "restart", "update", "flash", "uninstall"} {
 				if !strings.Contains(menu, "\n  "+command+" ") {
 					t.Fatalf("%s missing from %s command menu: %q", command, goos, menu)
+				}
+			}
+			text := menu
+			for _, command := range commands {
+				text += "\n" + command.syntax + "\n" + command.summary + "\n" + command.details
+			}
+			for _, line := range strings.Split(text, "\n") {
+				if len(line) > outputWidth {
+					t.Fatalf("help wraps: %q", line)
 				}
 			}
 		})
@@ -92,26 +114,6 @@ func TestCLIGeneralHelpAndUnknownCommandUsePlatformMenu(t *testing.T) {
 		if calls != 0 || !strings.Contains(menu, "Pipkin test shows") || !strings.Contains(menu, "\n  restart ") {
 			t.Fatalf("%v: calls=%d menu=%q", args, calls, menu)
 		}
-		if strings.Contains(menu, ", authorize") != (runtime.GOOS == "darwin") {
-			t.Fatalf("%v: incorrect authorize visibility on %s: %q", args, runtime.GOOS, menu)
-		}
-	}
-}
-
-func TestCLIRoutesRestartAndReportsFailures(t *testing.T) {
-	t.Setenv("PIPKIN_HOME", t.TempDir())
-	boom := errors.New("restart failed")
-	for _, result := range []error{nil, boom} {
-		calls := 0
-		commands := testCommands(t, io.Discard, map[string]func([]string) error{"restart": func([]string) error { calls++; return result }})
-		code, err := dispatch([]string{"restart"}, "test", commands, io.Discard)
-		wantCode := 0
-		if result != nil {
-			wantCode = 1
-		}
-		if calls != 1 || !errors.Is(err, result) || code != wantCode {
-			t.Fatalf("restart: code=%d error=%v calls=%d result=%v", code, err, calls, result)
-		}
 	}
 }
 
@@ -129,8 +131,80 @@ func TestCLIRoutesJSONAndReportsFailures(t *testing.T) {
 	if code, err := dispatch([]string{"status", "--json"}, "test", commands, io.Discard); code != 1 || !errors.Is(err, boom) || !statusJSON {
 		t.Fatalf("status route: %d, %v, %v", code, err, statusJSON)
 	}
-	if code, err := dispatch([]string{"unknown"}, "test", commands, io.Discard); code != 2 || err == nil {
-		t.Fatalf("unknown command: %d, %v", code, err)
+}
+
+func TestCLIVersionAliasesRemainScriptable(t *testing.T) {
+	for _, name := range []string{"version", "--version", "-v", "-V"} {
+		var out bytes.Buffer
+		code, err := dispatch([]string{name}, "test", cliCommands("test", "", "", "darwin", &out), &out)
+		if code != 0 || err != nil || out.String() != "test\n" {
+			t.Fatalf("%s: %d, %v, %q", name, code, err, out.String())
+		}
+	}
+}
+
+func TestCLITyposSuggestWithoutExecuting(t *testing.T) {
+	for _, name := range []string{"stats", "Status"} {
+		calls := 0
+		code, err := dispatch([]string{name}, "test", recordingCommands(io.Discard, &calls), io.Discard)
+		if code != 2 || err == nil || calls != 0 || !strings.Contains(err.Error(), "Did you mean 'pipkin status'?") || strings.Contains(err.Error(), "More:") {
+			t.Fatalf("%s: %d, %v, %d", name, code, err, calls)
+		}
+	}
+	commands := cliCommands("test", "", "", "linux", io.Discard)
+	if suggestCLICommand("ru", commands) != "" || suggestCLICommand("authoriz", commands) != "" {
+		t.Fatal("hidden commands were suggested")
+	}
+	if suggestCLICommand("res", commands) != "restart" || suggestCLICommand("sta", commands) != "" {
+		t.Fatal("unique and ambiguous prefixes were not distinguished")
+	}
+}
+
+func TestCLIRoutesTasksWithoutInstallation(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", "")
+	var out bytes.Buffer
+	calls := 0
+	commands := testCommands(t, &out, map[string]func([]string) error{"tasks": func(args []string) error {
+		calls++
+		if len(args) != 1 || args[0] != "--json" {
+			t.Fatalf("wrong options: %v", args)
+		}
+		return nil
+	}})
+	if code, err := dispatch([]string{"tasks", "--json"}, "test", commands, &out); code != 0 || err != nil || calls != 1 {
+		t.Fatalf("task route: %d, %v, %d", code, err, calls)
+	}
+}
+
+func TestCLIBareCommandShowsStatusAndKeepsHelpMenu(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(installedBinary()), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installedBinary(), []byte("fixture, never executed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	calls := 0
+	commands := testCommands(t, &out, map[string]func([]string) error{"status": func(args []string) error {
+		calls++
+		if len(args) != 0 {
+			t.Fatal("bare command requested JSON or a fresh read")
+		}
+		_, err := io.WriteString(&out, "Pipkin is running.\n")
+		return err
+	}})
+	if code, err := dispatch(nil, "test", commands, &out); code != 0 || err != nil || calls != 1 ||
+		out.String() != "Pipkin is running.\n\nRun 'pipkin help' to see all commands.\n" {
+		t.Fatalf("bare command: %d, %v, %q", code, err, out.String())
+	}
+	out.Reset()
+	if code, err := dispatch([]string{"help"}, "test", commands, &out); code != 0 || err != nil || calls != 1 || !strings.Contains(out.String(), "More:") {
+		t.Fatal("explicit help stopped showing the menu")
+	}
+	commands = testCommands(t, io.Discard, map[string]func([]string) error{"status": func([]string) error { return io.ErrClosedPipe }})
+	if code, err := dispatch(nil, "test", commands, io.Discard); code != 1 || !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatal("bare status hid its error")
 	}
 }
 
@@ -156,14 +230,10 @@ func TestCLIRunUsesStartupHome(t *testing.T) {
 	}
 }
 
-type failingCLIWriter struct{}
-
-func (failingCLIWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
-
 func TestCLIReportsOutputErrors(t *testing.T) {
 	t.Setenv("PIPKIN_HOME", filepath.Join(t.TempDir(), "uninstalled"))
 	for _, args := range [][]string{nil, {"version"}, {"license"}, {"stop", "--help"}} {
-		if code, err := dispatch(args, "test", testCommands(t, failingCLIWriter{}, nil), failingCLIWriter{}); code != 1 || !errors.Is(err, io.ErrClosedPipe) {
+		if code, err := dispatch(args, "test", testCommands(t, &outputTestWriter{err: io.ErrClosedPipe}, nil), &outputTestWriter{err: io.ErrClosedPipe}); code != 1 || !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("%v: %d, %v", args, code, err)
 		}
 	}

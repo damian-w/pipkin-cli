@@ -485,9 +485,14 @@ func TestFlashConfirmationBoundaries(t *testing.T) {
 }
 
 func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
-	for _, args := range [][]string{{"--yes"}, {"--port"}, {"--port", ""}, {"--version", ""}, {"--version", "main"}, {"--version", "1.0.0-beta"}, {"--port", "-oops"}, {"--port", "COM1\n"}, {"--version", strings.Repeat("9", 32) + ".0.0"}, {"extra"}} {
+	for _, args := range [][]string{{"--yes"}, {"--port", ""}, {"--version", ""}, {"--version", "main"}, {"--version", "1.0.0-beta"}, {"--port", "-oops"}, {"--port", "COM1\n"}, {"--version", strings.Repeat("9", 32) + ".0.0"}, {"extra"}} {
 		if _, err := parseFlashOptions(args); err == nil {
 			t.Fatal("invalid flash options accepted", args)
+		}
+	}
+	for _, args := range [][]string{{"--port"}, {"--port", "--reinstall"}, {"--version="}} {
+		if _, err := parseFlashOptions(args); err == nil || !strings.Contains(err.Error(), "needs a value") || !strings.HasPrefix(err.Error(), "--") {
+			t.Fatalf("%v: %v", args, err)
 		}
 	}
 	options, err := parseFlashOptions([]string{"--port", "COM3", "--version", "v1.0.0", "--reinstall", "--demo"})

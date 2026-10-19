@@ -160,13 +160,10 @@ func TestUpdateFlowAdvisesInBothSuccessBranchesWithoutChangingActivation(t *test
 					}
 					return "synthetic", nil
 				},
-				advisory: func(io.Writer) error {
-					events = append(events, "advisory")
-					return errors.New("optional advice unavailable")
-				},
+				advisory: func(io.Writer) { events = append(events, "advisory") },
 			}
 			if err := runUpdateCommand(&output, deps); err != nil {
-				t.Fatalf("advisory failure changed successful update: %v", err)
+				t.Fatalf("successful update failed: %v", err)
 			}
 			want := []string{"latest", "advisory"}
 			if newer {
@@ -186,21 +183,23 @@ func TestFirmwareAdviceUsesOnlySavedVersionAndBoundedOptionalLookup(t *testing.T
 	for _, current := range []string{"", "invalid", "1.0.0"} {
 		var output bytes.Buffer
 		calls := 0
-		err := writeFirmwareAdvisory(&output, func() (string, error) { return current, nil }, func(ctx context.Context) (string, error) {
+		writeFirmwareAdvisory(&output, func() (string, error) { return current, nil }, func(ctx context.Context) (string, error) {
 			calls++
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("firmware check has no deadline")
 			}
 			return "v1.1.0", nil
 		}, func(args ...string) string { return commandHintFor("linux", "/synthetic/pipkin", false, args...) })
-		if err != nil || calls != map[bool]int{true: 1, false: 0}[current == "1.0.0"] {
-			t.Fatalf("invalid saved firmware initiated advice: %v", err)
+		if calls != map[bool]int{true: 1, false: 0}[current == "1.0.0"] {
+			t.Fatalf("invalid saved firmware initiated advice: %d lookups", calls)
 		}
 		if current == "1.0.0" && (!strings.Contains(output.String(), "Display firmware 1.1.0 is available (yours is 1.0.0)") || !strings.Contains(output.String(), "'/synthetic/pipkin' flash")) {
 			t.Fatalf("firmware advice invented a live state or unusable command: %s", output.String())
 		}
 	}
-	if err := writeFirmwareAdvisory(io.Discard, func() (string, error) { return "1.0.0", nil }, func(context.Context) (string, error) { return "", errors.New("offline") }, nil); err != nil {
+	var offline bytes.Buffer
+	writeFirmwareAdvisory(&offline, func() (string, error) { return "1.0.0", nil }, func(context.Context) (string, error) { return "", errors.New("offline") }, nil)
+	if offline.Len() != 0 {
 		t.Fatal("optional network failure escaped the firmware advice")
 	}
 }
@@ -235,11 +234,12 @@ func TestInstalledAuthorizationPrintsNoticeAndDiscardsChildOutput(t *testing.T) 
 	for _, failed := range []bool{false, true} {
 		var live, warnings bytes.Buffer
 		authorizeInstalledHelperWithNoticeFor("darwin", func() bool { return true }, func(cmd *exec.Cmd) error {
-			if cmd.Path != installedBinary() || !slices.Contains(cmd.Env, "PIPKIN_AUTHORIZE_NESTED=1") {
-				t.Fatal("authorization did not use the nested installed replacement")
+			if cmd.Path != installedBinary() || !slices.Equal(cmd.Args, []string{installedBinary(), "authorize"}) ||
+				!slices.Contains(cmd.Env, "PIPKIN_AUTHORIZE_NESTED=1") {
+				t.Fatalf("authorization did not use the nested installed replacement: path=%q args=%q", cmd.Path, cmd.Args)
 			}
-			if cmd.Stdout != io.Discard || cmd.Stderr != io.Discard {
-				t.Fatal("child output was not discarded")
+			if cmd.Stdin != os.Stdin || cmd.Stdout != io.Discard || cmd.Stderr != io.Discard {
+				t.Fatal("child output was not discarded while retaining foreground input")
 			}
 			if live.String() != notice.String() {
 				t.Fatal("permission notice was not shown before authorization")

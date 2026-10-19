@@ -2,6 +2,7 @@ package pipkin
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -239,5 +240,52 @@ func TestStatusDisplayHintsUseErrorDetailNotPortName(t *testing.T) {
 		if text := out.String(); !strings.Contains(text, c.want) || strings.Contains(text, c.avoid) {
 			t.Fatalf("display hint misclassified %q: %q", c.reason, text)
 		}
+	}
+}
+
+func TestStatusJSONMissingSnapshotKeepsContractAndCreatesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "absent")
+	t.Setenv("PIPKIN_HOME", dir)
+	var out bytes.Buffer
+	err := statusJSONTo(&out)
+	if err == nil || err.Error() != "no helper snapshot yet; run `pipkin usage --json` for a fresh read" || out.Len() != 0 {
+		t.Fatalf("missing-snapshot JSON contract changed: %v %s", err, out.String())
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing JSON snapshot created files")
+	}
+}
+
+func TestStatusJSONPreservesCachedFieldsAndDoesNotRewriteSnapshot(t *testing.T) {
+	t.Setenv("PIPKIN_HOME", t.TempDir())
+	saved := Status{SchemaVersion: 1, Version: "fixture", PID: 42, Updated: testNow,
+		Device:     map[string]string{"port": "COM9", "firmware": "1.0.0"},
+		States:     map[string]string{"codex": "unavailable", "claude": "signed_out"},
+		Readings:   map[string]*Reading{"codex": {Account: "invented", Observed: testNow, SessionNoCap: true}, "claude": {Account: "claude"}},
+		CodexError: "Codex: synthetic cached error", ClaudeError: "Claude: no existing sign-in found",
+		Tasks: &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{
+			"codex": {Coverage: "partial", Tasks: []Task{{ID: "codex:invented", Status: "working"}}},
+		}}}
+	if err := writeJSON(statusPath(), saved); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(statusPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := statusJSONTo(&out); err != nil {
+		t.Fatal(err)
+	}
+	expected := saved
+	expected.PID = 0
+	expected.Tasks = &TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{"codex": {Coverage: "unavailable"}}}
+	want, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil || out.String() != string(want)+"\n" {
+		t.Fatalf("cached JSON contract changed: %v\n%s", err, out.String())
+	}
+	after, err := os.ReadFile(statusPath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("reading JSON rewrote the cached snapshot")
 	}
 }
