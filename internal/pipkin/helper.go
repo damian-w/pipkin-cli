@@ -91,16 +91,20 @@ func newHelper() (*Helper, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Helper{config: config, now: time.Now, device: map[string]string{},
-		readings: map[string]*Reading{}, apps: map[string]string{}, sent: map[string]string{},
-		due: map[string]time.Time{}, cooldown: map[string]time.Time{}, observedGeneration: map[string]uint64{},
-		providerErrors: map[string]string{}, pending: map[string]bool{}, results: make(chan providerResult, len(providers))}
-	h.write = h.writeSerial
+	h := helperState(config)
+	h.write, h.collect, h.monitor = h.writeSerial, collectProvider, startPowerMonitor
 	h.collectTasks = h.collectLiveTasks
 	h.startCodexWatch = startLiveCodexTasks
-	h.taskResults = make(chan taskCollectionResult, 1)
-	h.taskWake = make(chan struct{}, 1)
 	return h, nil
+}
+
+// helperState returns a Helper with its state allocated and no I/O wired in.
+func helperState(config Config) *Helper {
+	return &Helper{config: config, ctx: context.Background(), now: time.Now, device: map[string]string{},
+		readings: map[string]*Reading{}, apps: map[string]string{}, sent: map[string]string{},
+		due: map[string]time.Time{}, cooldown: map[string]time.Time{}, observedGeneration: map[string]uint64{},
+		providerErrors: map[string]string{}, pending: map[string]bool{}, results: make(chan providerResult, len(providers)),
+		taskResults: make(chan taskCollectionResult, 1), taskWake: make(chan struct{}, 1)}
 }
 
 func (h *Helper) writeSerial(ctx context.Context, line string) error {
@@ -108,13 +112,6 @@ func (h *Helper) writeSerial(ctx context.Context, line string) error {
 		return errors.New("display is disconnected")
 	}
 	return h.conn.port.Write(ctx, []byte(line))
-}
-
-func (h *Helper) context() context.Context {
-	if h.ctx != nil {
-		return h.ctx
-	}
-	return context.Background()
 }
 
 func (h *Helper) send(fields string) bool {
@@ -130,7 +127,7 @@ func (h *Helper) send(fields string) bool {
 		return false
 	}
 	h.sequence++
-	ctx, cancel := context.WithTimeout(h.context(), powerWriteTimeout)
+	ctx, cancel := context.WithTimeout(h.ctx, powerWriteTimeout)
 	defer cancel()
 	if err := h.write(ctx, fmt.Sprintf("v=%d seq=%d %s\n", protocolVersion, h.sequence, fields)); err != nil {
 		h.disconnect("write failed: " + err.Error())
@@ -297,35 +294,34 @@ func (h *Helper) flush() {
 		if reading == nil || reading.Observed == 0 || h.apps[provider] == "signed_out" || h.observedGeneration[provider] != h.generation {
 			continue
 		}
-		fields := fmt.Sprintf("kind=usage provider=%s mode=full %s", provider, usageFields(reading))
-		if h.clockEpoch != 0 {
-			fields += fmt.Sprintf(" clock_epoch=%d", h.clockEpoch)
-		}
-		if h.sent[provider] != fields {
-			if !h.send(fields) {
-				return
-			}
-			h.sent[provider] = fields
+		if !h.sendChanged(provider, fmt.Sprintf("kind=usage provider=%s mode=full %s", provider, usageFields(reading))) {
+			return
 		}
 	}
 	if !h.tasksCurrent || h.tasks == nil {
 		return
 	}
 	for _, provider := range providers {
-		fields := taskFields(provider, h.tasks)
-		if fields == "" {
-			continue
-		}
-		if h.clockEpoch != 0 {
-			fields += fmt.Sprintf(" clock_epoch=%d", h.clockEpoch)
-		}
-		if h.sent[provider+"_tasks"] != fields {
-			if !h.send(fields) {
-				return
-			}
-			h.sent[provider+"_tasks"] = fields
+		if fields := taskFields(provider, h.tasks); fields != "" && !h.sendChanged(provider+"_tasks", fields) {
+			return
 		}
 	}
+}
+
+// sendChanged tags fields with the clock epoch and sends them unless the
+// display already has them. It reports false when the send fails.
+func (h *Helper) sendChanged(key, fields string) bool {
+	if h.clockEpoch != 0 {
+		fields += fmt.Sprintf(" clock_epoch=%d", h.clockEpoch)
+	}
+	if h.sent[key] == fields {
+		return true
+	}
+	if !h.send(fields) {
+		return false
+	}
+	h.sent[key] = fields
+	return true
 }
 
 func (h *Helper) handleInput() {
@@ -404,9 +400,6 @@ func (h *Helper) pollProviders(ctx context.Context, now time.Time) {
 					h.pending[provider] = true
 					generation, salt := h.generation, h.config.Salt
 					collect := h.collect
-					if collect == nil {
-						collect = collectProvider
-					}
 					go func() {
 						result := collect(ctx, provider, salt)
 						result.generation = generation
@@ -464,11 +457,7 @@ func (h *Helper) run(ctx context.Context) {
 	}
 	events := make(chan powerEvent, 32)
 	h.powerEvents = events
-	monitor := h.monitor
-	if monitor == nil {
-		monitor = startPowerMonitor
-	}
-	stop, err := monitor(ctx, events)
+	stop, err := h.monitor(ctx, events)
 	if err != nil {
 		logf("host power notifications unavailable: %v; using display heartbeat timeout", err)
 	}

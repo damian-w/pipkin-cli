@@ -126,7 +126,6 @@ func TestTaskCacheFreshnessDoesNotInventZeroOrMutateSnapshot(t *testing.T) {
 func TestHelperTaskPollingIsAsynchronousAndIndependentOfUSB(t *testing.T) {
 	h, _ := testHelper()
 	now := h.now()
-	h.taskResults = make(chan taskCollectionResult, 1)
 	started, release, finished := make(chan struct{}, 2), make(chan struct{}), make(chan struct{}, 2)
 	h.collectTasks = func(context.Context) TaskSnapshot {
 		started <- struct{}{}
@@ -161,7 +160,6 @@ func TestHelperTaskRejectsPreWakeResults(t *testing.T) {
 	h, _ := testHelper()
 	clock := h.now()
 	h.now = func() time.Time { return clock }
-	h.taskResults = make(chan taskCollectionResult, 1)
 	old := &TaskSnapshot{SchemaVersion: 1, ObservedAt: clock.Unix(), Providers: map[string]TaskProvider{
 		"claude": {Coverage: "partial", Tasks: []Task{{ID: "claude:old", Status: "working"}}},
 	}}
@@ -216,7 +214,6 @@ func TestHelperTaskRejectsPreWakeResults(t *testing.T) {
 
 func TestHelperTasksRenewOnStatusChangeAndEveryRefresh(t *testing.T) {
 	h, _ := testHelper()
-	h.taskResults = make(chan taskCollectionResult, 1)
 	start := h.now()
 	poll := func(at time.Time, status string) *TaskSnapshot {
 		t.Helper()
@@ -247,8 +244,6 @@ func TestHelperTasksRenewOnStatusChangeAndEveryRefresh(t *testing.T) {
 
 func TestHelperTasksPauseWhileAsleepAndWakeOnCodexChange(t *testing.T) {
 	h, _ := testHelper()
-	h.taskResults = make(chan taskCollectionResult, 1)
-	h.taskWake = make(chan struct{}, 1)
 	h.collectTasks = func(context.Context) TaskSnapshot {
 		return TaskSnapshot{SchemaVersion: 1, ObservedAt: testNow, Providers: map[string]TaskProvider{"codex": {Coverage: "unavailable"}}}
 	}

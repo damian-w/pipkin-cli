@@ -154,9 +154,6 @@ func identify(parent context.Context, c *connection, timeout time.Duration) map[
 			}
 			next = time.Now().Add(time.Second)
 		}
-		if ctx.Err() != nil {
-			return nil
-		}
 		lines, err := c.lines()
 		if err != nil || ctx.Err() != nil {
 			return nil

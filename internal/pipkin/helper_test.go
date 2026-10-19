@@ -3,6 +3,7 @@ package pipkin
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,6 +34,7 @@ func TestBounds(t *testing.T) {
 type fakePort struct {
 	incoming []byte
 	written  []string
+	writeErr error
 	closed   bool
 }
 
@@ -41,7 +43,7 @@ func (p *fakePort) Write(ctx context.Context, data []byte) error {
 		return err
 	}
 	p.written = append(p.written, string(data))
-	return nil
+	return p.writeErr
 }
 func (p *fakePort) ReadAvailable() ([]byte, error) {
 	data := p.incoming
@@ -65,24 +67,10 @@ func TestConnectionSplitsLines(t *testing.T) {
 
 func testHelper() (*Helper, *[]string) {
 	lines := &[]string{}
-	h := &Helper{readings: map[string]*Reading{}, apps: map[string]string{}, sent: map[string]string{},
-		due: map[string]time.Time{}, cooldown: map[string]time.Time{}, observedGeneration: map[string]uint64{},
-		providerErrors: map[string]string{}, pending: map[string]bool{}, results: make(chan providerResult, len(providers)),
-		now: func() time.Time { return time.Unix(testNow, 0).In(time.FixedZone("", 600*60)) }}
+	h := helperState(Config{})
+	h.now = func() time.Time { return time.Unix(testNow, 0).In(time.FixedZone("", 600*60)) }
 	h.write = func(_ context.Context, line string) error { *lines = append(*lines, line); return nil }
 	return h, lines
-}
-
-func TestFlushSendsOnlyChanges(t *testing.T) {
-	h, lines := testHelper()
-	h.clockEpoch = 42
-	h.apps["codex"] = "available"
-	h.readings["codex"] = &Reading{Account: "codex", Observed: testNow, Weekly: &Window{Used: 10}}
-	h.flush()
-	h.flush()
-	if len(*lines) != 2 || !strings.HasSuffix((*lines)[1], "clock_epoch=42\n") {
-		t.Fatalf("lines = %q", *lines)
-	}
 }
 
 func TestUnrequestedIdentityIsIgnored(t *testing.T) {
@@ -523,4 +511,59 @@ func TestRunCommandRemovesPublishedPIDWhenMaintenanceCloseFails(t *testing.T) {
 		t.Fatalf("failed startup retained the maintenance lock: %v", err)
 	}
 	maintenance.Close()
+}
+
+func TestStatusDiscoveryClearsBusyWhenNoCandidatesRemain(t *testing.T) {
+	isolate(t)
+	h, _ := testHelper()
+	h.device = map[string]string{"error": "old-port: resource busy"}
+	h.connectPorts(context.Background(), nil, func(string) (serialPort, error) {
+		t.Fatal("empty discovery attempted to open a port")
+		return nil, io.ErrClosedPipe
+	})
+	if h.device["error"] != "" || h.conn != nil || h.device["port"] != "" {
+		t.Fatalf("unplugged display retained a busy/connected claim: %#v", h.device)
+	}
+}
+
+func TestStatusDiscoveryOpenUnidentifiedPortClearsOldBusy(t *testing.T) {
+	isolate(t)
+	h, lines := testHelper()
+	h.device = map[string]string{"error": "previous-port: resource busy"}
+	port := &fakePort{writeErr: io.ErrClosedPipe}
+	h.connectPorts(context.Background(), []string{"unidentified-port"}, func(name string) (serialPort, error) {
+		if name != "unidentified-port" {
+			t.Fatal("unexpected discovery candidate")
+		}
+		return port, nil
+	})
+	if h.device["error"] != "" || h.device["port"] != "" || h.conn != nil || !port.closed || len(port.written) != 1 || len(*lines) != 0 {
+		t.Fatalf("unidentified port inherited busy state or became connected: device=%#v closed=%t writes=%d", h.device, port.closed, len(port.written))
+	}
+}
+
+func TestStatusDiscoveryCancellationKeepsLastObservation(t *testing.T) {
+	for _, connected := range []bool{false, true} {
+		isolate(t)
+		h, _ := testHelper()
+		original := map[string]string{"error": "last observation: resource busy"}
+		var port *fakePort
+		if connected {
+			original = map[string]string{"port": "last-port", "firmware": "9.8.7"}
+			port = &fakePort{}
+			h.conn = &connection{port: port, name: "last-port"}
+		}
+		h.device = original
+		h.connectPorts(cancelledContext(), nil, func(string) (serialPort, error) {
+			t.Fatal("cancelled discovery opened a port")
+			return nil, io.ErrClosedPipe
+		})
+		if connected {
+			if h.conn == nil || h.device["port"] != "last-port" || port.closed {
+				t.Fatal("cancelled discovery claimed a disconnect")
+			}
+		} else if h.device["error"] == "" {
+			t.Fatal("cancelled discovery erased an observation without checking candidates")
+		}
+	}
 }

@@ -6,11 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
-
-type failingBoundedReader struct{ err error }
-
-func (reader failingBoundedReader) Read([]byte) (int, error) { return 0, reader.err }
 
 func TestReadBounded(t *testing.T) {
 	for _, size := range []int{0, 4, 5} {
@@ -24,7 +21,7 @@ func TestReadBounded(t *testing.T) {
 		}
 	}
 	want := errors.New("reader failed")
-	if data, err := readBounded(failingBoundedReader{want}, 4); data != nil || !errors.Is(err, want) {
+	if data, err := readBounded(iotest.ErrReader(want), 4); data != nil || !errors.Is(err, want) {
 		t.Fatalf("reader error lost: %v", err)
 	}
 	if _, err := readBounded(strings.NewReader(""), 0); err != nil {

@@ -21,8 +21,8 @@ func openSerial(name string) (serialPort, error) {
 		unix.Close(fd)
 		return nil, err
 	}
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.TIOCEXCL, 0); errno != 0 {
-		return fail(errno)
+	if err := unix.IoctlSetInt(fd, unix.TIOCEXCL, 0); err != nil {
+		return fail(err)
 	}
 	termios, err := unix.IoctlGetTermios(fd, termiosGet)
 	if err != nil {

@@ -3,6 +3,7 @@ package pipkin
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -51,14 +52,10 @@ func (h *Helper) pollTasks(ctx context.Context, now time.Time) {
 	select {
 	case result := <-h.taskResults:
 		h.taskPending = false
-		if h.taskCancel != nil {
-			h.taskCancel()
-			h.taskCancel = nil
-		}
 		if result.generation == h.generation {
 			// Keep the earlier observation while statuses hold, so the cache and
 			// display renew on change and every taskRefreshEvery, not every read.
-			if !h.tasksCurrent || h.tasks == nil || !sameTaskSnapshot(h.tasks, &result.snapshot) ||
+			if !h.tasksCurrent || h.tasks == nil || !maps.EqualFunc(h.tasks.Providers, result.snapshot.Providers, sameTaskStatuses) ||
 				result.snapshot.ObservedAt-h.tasks.ObservedAt >= int64(taskRefreshEvery/time.Second) {
 				h.tasks = &result.snapshot
 			}
@@ -108,9 +105,6 @@ func (h *Helper) collectLiveTasks(ctx context.Context) TaskSnapshot {
 				return watch.current()
 			}
 			_, coverage := codexDesktopTasks()
-			if coverage != "unsupported" {
-				coverage = "unavailable"
-			}
 			return TaskProvider{Coverage: coverage}
 		},
 	})
@@ -122,20 +116,6 @@ func signalTasks(wake chan struct{}) {
 	case wake <- struct{}{}:
 	default:
 	}
-}
-
-// sameTaskSnapshot compares every provider's coverage and task statuses.
-func sameTaskSnapshot(a, b *TaskSnapshot) bool {
-	if len(a.Providers) != len(b.Providers) {
-		return false
-	}
-	for provider, value := range a.Providers {
-		other, ok := b.Providers[provider]
-		if !ok || !sameTaskStatuses(value, other) {
-			return false
-		}
-	}
-	return true
 }
 
 func readableTaskSnapshot(snapshot *TaskSnapshot, running bool, now time.Time) *TaskSnapshot {
