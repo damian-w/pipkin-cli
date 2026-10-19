@@ -49,14 +49,7 @@ for system-library and antivirus considerations.
 
 ## Pinned archive digests
 
-These are the asset digests returned by GitHub's public API for the official
-v5.4.0 release. Updating the helper is a reviewed source change, independent of
-choosing a newer Pipkin firmware release.
-
-```text
-910bb64fe39a84c792752701293c8aa294faeef229fe8705ecd6955b01db3778  esptool-v5.4.0-macos-amd64.tar.gz
-ba332671130939e2e6db90c2784488f7e62a1459b0fe3c5ec66e9a366821de7a  esptool-v5.4.0-macos-arm64.tar.gz
-61648fbae20735cabb342f2fbe8fc89b3046e1ed6f9c3e09528d837dc9a9b152  esptool-v5.4.0-linux-amd64.tar.gz
-2964fff085071c1403f2cf812a7a1d425f987f9992851a60236bbee17b6e7dcc  esptool-v5.4.0-linux-aarch64.tar.gz
-b7f6b9dd301a210b31f4829118c909c84aae23107f9ca1fdc14ccf4d7384be2e  esptool-v5.4.0-windows-amd64.zip
-```
+`flashToolAssets` in [internal/pipkin/flash_tool.go](../internal/pipkin/flash_tool.go)
+pins each archive to the asset digest returned by GitHub's public API for the
+official v5.4.0 release. Updating the helper is a reviewed source change,
+independent of choosing a newer Pipkin firmware release.

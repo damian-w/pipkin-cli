@@ -10,9 +10,9 @@ fail() {
 
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 if command -v sha256sum >/dev/null 2>&1; then
-    checksum=sha256sum
+    sha256() { sha256sum "$1"; }
 elif command -v shasum >/dev/null 2>&1; then
-    checksum=shasum
+    sha256() { shasum -a 256 "$1"; }
 else
     fail "sha256sum or shasum is required to verify the download."
 fi
@@ -52,11 +52,7 @@ curl -fsSL "$release/$asset" -o "$workdir/pipkin" || fail "could not download Pi
 curl -fsSL "$release/SHA256SUMS" -o "$workdir/SHA256SUMS" || fail "could not download checksums."
 
 expected=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1 }' "$workdir/SHA256SUMS")
-if [ "$checksum" = sha256sum ]; then
-    actual=$(sha256sum "$workdir/pipkin" | cut -d ' ' -f 1)
-else
-    actual=$(shasum -a 256 "$workdir/pipkin" | cut -d ' ' -f 1)
-fi
+actual=$(sha256 "$workdir/pipkin" | cut -d ' ' -f 1)
 [ -n "$expected" ] && [ "$expected" = "$actual" ] ||
     fail "the Pipkin download failed its checksum; nothing was installed."
 

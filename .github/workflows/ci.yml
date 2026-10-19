@@ -47,29 +47,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { throw ($errors | Out-String) }
           go build -o "$env:RUNNER_TEMP/fakeinstall.exe" ./scripts/fakeinstall
           ./scripts/install_test.ps1 -FakeHelper "$env:RUNNER_TEMP/fakeinstall.exe"
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_test.ps1 -FakeHelper "$env:RUNNER_TEMP/fakeinstall.exe"
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell installer checks failed" }
       - name: Formatting and cross compilation
         if: runner.os == 'Linux'
-        env:
-          CGO_ENABLED: "0"
         run: |
           test -z "$(gofmt -l .)"
-          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
-            os="${target%/*}" arch="${target#*/}"
-            if [ "$os" = windows ]; then
-              sh scripts/windows_resources.sh 0.0.0 "$arch" pipkinw.exe "Pipkin helper"
-            fi
-            GOOS="$os" GOARCH="$arch" go build -o "$RUNNER_TEMP/pipkin-$os-$arch" .
-            rm -f rsrc_windows_*.syso
-          done
+          sh scripts/build.sh 0.0.0
           for arch in amd64 arm64; do
-            go run github.com/tc-hib/go-winres@v0.3.3 extract --xml-manifest --dir "$RUNNER_TEMP/resources-$arch" "$RUNNER_TEMP/pipkin-windows-$arch"
+            go run github.com/tc-hib/go-winres@v0.3.3 extract --xml-manifest --dir "$RUNNER_TEMP/resources-$arch" "dist/pipkinw-windows-$arch.exe"
             grep -q '"OriginalFilename": "pipkinw.exe"' "$RUNNER_TEMP/resources-$arch/winres.json"
             grep -q 'requestedExecutionLevel level="asInvoker"' "$RUNNER_TEMP/resources-$arch/app.manifest"
           done

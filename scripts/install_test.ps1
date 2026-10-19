@@ -18,7 +18,6 @@ $sums = foreach ($name in @('pipkin', 'pipkinw')) {
 }
 [System.IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS'), (($sums -join "`n") + "`n"))
 
-# Match Invoke-WebRequest: binary Content unless -OutFile is supplied.
 $script:noRelease = $false
 function Invoke-WebRequest {
     param([switch] $UseBasicParsing, [string] $Method, [string] $OutFile, [Parameter(Position = 0)] [string] $Uri)
@@ -31,7 +30,6 @@ function Invoke-WebRequest {
     if (-not $Uri.StartsWith($prefix)) { throw "unexpected download: $Uri" }
     $file = Join-Path $assets $Uri.Substring($prefix.Length)
     if ($OutFile) { Copy-Item -LiteralPath $file -Destination $OutFile; return }
-    return [pscustomobject] @{ Content = [System.IO.File]::ReadAllBytes($file) }
 }
 
 function Check($condition, $message) {

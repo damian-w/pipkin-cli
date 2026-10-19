@@ -110,11 +110,7 @@ your home or current folder.
 ## Output and display support
 
 The [output reference](output.md) covers JSON fields, units, missing values,
-provider states, freshness and errors.
-
-Current USB firmware receives session, weekly, reset-time, and banked-reset
-information. Additional metrics are available in JSON and require a compatible
-firmware update to appear on the physical display. See the [display protocol](https://github.com/damian-w/pipkin/blob/main/docs/protocol.md).
+provider states, freshness and errors, and [what the display receives](output.md#display-integrations).
 
 ## Compatibility
 

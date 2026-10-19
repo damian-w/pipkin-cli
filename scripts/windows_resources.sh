@@ -8,13 +8,6 @@ version=$1 arch=$2 filename=$3 description=$4
 case $version in
     '' | *[!0-9.]*) printf 'invalid version: %s\n' "$version" >&2; exit 1 ;;
 esac
-case $arch in
-    amd64 | arm64) ;;
-    *) printf 'unsupported Windows architecture: %s\n' "$arch" >&2; exit 1 ;;
-esac
-case $filename$description in
-    *[\"\\]*) printf 'filename and description cannot contain quotes or backslashes\n' >&2; exit 1 ;;
-esac
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' 0
 cat > "$workdir/winres.json" <<EOF

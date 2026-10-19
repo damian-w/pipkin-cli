@@ -13,11 +13,7 @@ cat > "$testdir/assets/pipkin" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$@" > "$TEST_INSTALL_DIR/installed"
 EOF
-if command -v sha256sum >/dev/null 2>&1; then
-    sum=$(sha256sum "$testdir/assets/pipkin" | cut -d ' ' -f 1)
-else
-    sum=$(shasum -a 256 "$testdir/assets/pipkin" | cut -d ' ' -f 1)
-fi
+sum=$( (sha256sum "$testdir/assets/pipkin" 2>/dev/null || shasum -a 256 "$testdir/assets/pipkin") | cut -d ' ' -f 1)
 printf '%s  pipkin-linux-arm64\n' "$sum" > "$testdir/assets/SHA256SUMS"
 cat > "$testdir/bin/uname" <<'EOF'
 #!/bin/sh

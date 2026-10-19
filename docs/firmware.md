@@ -24,7 +24,8 @@ and touch parts, not the seller's product name. Compare yours with the
 [board profiles](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profiles).
 The CYD has been tested on a physical board on macOS: first installation, updates
 that keep settings, USB reset, and the screen and touch. The ES3C40P has been
-installed and updated on macOS. The 4-inch board needs Pipkin 2.1 or later.
+installed and updated on macOS. Flashing hasn't been tested on Linux or Windows
+yet. The 4-inch board needs Pipkin 2.1 or later.
 
 A display running Pipkin reports its board. Otherwise Pipkin tells the boards
 apart by their chip, ESP32 or ESP32-S3, and checks the flash size, but it can't
@@ -140,18 +141,11 @@ command before writing; reinstalling does not bypass those checks.
 
 ## Flashing tool and platform support
 
-Pipkin downloads Espressif's official **esptool v5.4.0**, checks the download and
-keeps a private copy, so you don't need to install Python or ESP-IDF. The tool
-runs only when you use `pipkin flash`, never in the background. GitHub requests
-carry no usage readings or sign-ins, and Pipkin has no telemetry.
-
-See [flashing-tool provenance and licences](esptool.md) for the pinned downloads,
-cache checks and the tool's third-party notices.
-
-Pipkin runs on macOS, Linux and Windows, on both Intel/AMD and ARM. On Windows ARM,
-flashing runs the official Intel/AMD tool through Windows 11's emulation. Flashing
-has been tested with both physical boards on macOS; the other systems haven't been
-yet.
+Pipkin's flashing tool runs only when you use `pipkin flash`, never in the
+background. GitHub requests carry no usage readings or sign-ins, and Pipkin has no
+telemetry. See [flashing-tool provenance and licences](esptool.md) for the pinned
+downloads, supported platforms (Windows ARM uses Windows 11's emulation), cache
+checks and the tool's third-party notices.
 
 Building and flashing your own firmware with ESP-IDF remains available in the
 [source-build guide](https://github.com/damian-w/pipkin/blob/main/docs/development.md#build-firmware-from-source).

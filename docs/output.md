@@ -134,9 +134,10 @@ keeps a live connection to the Codex app, so changes show within a couple of
 seconds. It saves them as `tasks` in the status snapshot when a status changes
 and at least every 15 seconds. It is omitted before the first check. Sleep and
 wake discard earlier results. `status --json` reports
-every provider as `unavailable` with `tasks: null` when the helper is stopped or
-the check is 45 seconds old or more, or in the future, keeping the original
-`observed_at`. The display uses the same 45-second limit.
+every provider as `unavailable` (or `unsupported` on Linux) with `tasks: null`
+when the helper is stopped or the check is 45 seconds old or more, or in the
+future, keeping the original `observed_at`. The display uses the same 45-second
+limit.
 
 `pipkin tasks` never updates the cache or the display. The helper sends the
 display only each provider's coverage and its working, needs-attention and

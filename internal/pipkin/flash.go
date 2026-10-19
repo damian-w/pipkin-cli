@@ -65,7 +65,7 @@ func parseFlashOptions(args []string) (flashOptions, error) {
 	}
 	if options.Version != "" {
 		if _, valid := stableVersionNumbers(options.Version); !valid {
-			return options, errors.New("firmware version must be a stable version such as 1.0.0")
+			return options, errors.New("firmware version must be a stable version such as 2.1.0")
 		}
 		options.Version = strings.TrimPrefix(options.Version, "v")
 	}

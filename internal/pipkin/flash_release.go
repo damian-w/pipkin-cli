@@ -196,7 +196,7 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent strin
 	endpoint := s.api + "/releases/latest"
 	if selectedVersion != "" {
 		if !stableFirmwareVersion.MatchString(selectedVersion) {
-			return nil, errors.New("firmware version must be a stable version such as 1.0.0")
+			return nil, errors.New("firmware version must be a stable version such as 2.1.0")
 		}
 		endpoint = s.api + "/releases/tags/v" + strings.TrimPrefix(selectedVersion, "v")
 	}
