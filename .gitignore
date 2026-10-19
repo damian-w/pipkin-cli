@@ -1,6 +1,7 @@
 /pipkin
 /pipkin.exe
 /pipkinw.exe
+/rsrc_windows_*.syso
 /dist/
 *.test
 *.test.exe
