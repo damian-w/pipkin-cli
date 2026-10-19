@@ -1,38 +1,13 @@
 package pipkin
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 	"time"
 )
 
-var serviceCommand = runServiceCommand
-
 var errHelperTimeout = errors.New("timed out waiting for the helper")
-
-func runServiceCommand(name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-	if ctx.Err() != nil {
-		return fmt.Errorf("%s timed out: %w", name, ctx.Err())
-	}
-	if err != nil {
-		return fmt.Errorf("%s %s failed: %w%s", name, strings.Join(args, " "), err, commandDetail(output))
-	}
-	return nil
-}
-
-func commandDetail(output []byte) string {
-	if detail := strings.TrimSpace(string(output)); detail != "" {
-		return ": " + detail
-	}
-	return ""
-}
 
 func pathExists(path string) (bool, error) {
 	_, err := os.Stat(path)

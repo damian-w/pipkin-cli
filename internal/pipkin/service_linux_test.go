@@ -23,7 +23,7 @@ func TestLinuxAutostartPreservesHomeAndValidCommandEscaping(t *testing.T) {
 		t.Fatal(err)
 	}
 	serviceCommand = func(string, ...string) error { return nil }
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	unit, err := os.ReadFile(systemdUnitPath())
@@ -39,7 +39,7 @@ func TestLinuxAutostartPreservesHomeAndValidCommandEscaping(t *testing.T) {
 		}
 	}
 	serviceCommand = func(string, ...string) error { return errors.New("no systemd session") }
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	entry, err := os.ReadFile(desktopEntryPath())
@@ -68,7 +68,7 @@ func TestLinuxAutostartRegistrationReportsEnableFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := registerAutostart(); !errors.Is(err, wanted) {
+	if err := registerAutostart(); !errors.Is(err, wanted) {
 		t.Fatalf("register error = %v", err)
 	}
 	if data, err := os.ReadFile(desktopEntryPath()); err != nil || string(data) != "existing fallback" {
@@ -89,7 +89,7 @@ func TestLinuxAutostartRollbackPreservesAbsentRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	if err := restore(); err != nil {
@@ -118,7 +118,7 @@ func TestLinuxAutostartRollbackRestoresExistingDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	if err := restore(); err != nil {

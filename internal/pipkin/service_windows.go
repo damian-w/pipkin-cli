@@ -16,18 +16,18 @@ import (
 
 const runKey = `Software\Microsoft\Windows\CurrentVersion\Run`
 
-func registerAutostart() (string, error) {
+func registerAutostart() error {
 	dir, err := resolvedAppDir()
 	if err != nil {
-		return "", err
+		return err
 	}
 	key, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer key.Close()
 	command := syscall.EscapeArg(serviceBinary()) + " run --home " + syscall.EscapeArg(dir)
-	return "a sign-in startup entry", key.SetStringValue("Pipkin", command)
+	return key.SetStringValue("Pipkin", command)
 }
 
 func removeAutostart() error {
@@ -46,21 +46,30 @@ func removeAutostart() error {
 	return err
 }
 
+// readUserRegistryString reports a missing key or value as not found rather than as an error.
+func readUserRegistryString(path, name string) (value string, kind uint32, found bool, err error) {
+	key, err := registry.OpenKey(registry.CURRENT_USER, path, registry.QUERY_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	defer key.Close()
+	value, kind, err = key.GetStringValue(name)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", 0, false, nil
+	}
+	return value, kind, err == nil, err
+}
+
 func snapshotAutostart() (func() error, error) {
-	key, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
-	if errors.Is(err, registry.ErrNotExist) {
-		return removeAutostart, nil
-	}
+	value, kind, found, err := readUserRegistryString(runKey, "Pipkin")
 	if err != nil {
 		return nil, err
 	}
-	value, kind, err := key.GetStringValue("Pipkin")
-	key.Close()
-	if errors.Is(err, registry.ErrNotExist) {
+	if !found {
 		return removeAutostart, nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	return func() error {
 		key, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
@@ -81,27 +90,12 @@ func installLauncher() error { return updateUserPath(filepath.Dir(installedBinar
 func removeLauncher() error { return updateUserPath(filepath.Dir(installedBinary()), true) }
 
 func launcherMissing() (bool, error) {
-	present, err := userPathContains(filepath.Dir(installedBinary()))
-	return !present, err
-}
-
-func userPathContains(folder string) (bool, error) {
-	key, err := registry.OpenKey(registry.CURRENT_USER, "Environment", registry.QUERY_VALUE)
-	if errors.Is(err, registry.ErrNotExist) {
-		return false, nil
+	value, _, found, err := readUserRegistryString("Environment", "Path")
+	if !found || err != nil {
+		return true, err
 	}
-	if err != nil {
-		return false, err
-	}
-	defer key.Close()
-	value, _, err := key.GetStringValue("Path")
-	if errors.Is(err, registry.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return slices.ContainsFunc(strings.Split(value, ";"), func(part string) bool { return samePathEntry(part, folder) }), nil
+	folder := filepath.Dir(installedBinary())
+	return !slices.ContainsFunc(strings.Split(value, ";"), func(part string) bool { return samePathEntry(part, folder) }), nil
 }
 
 func samePathEntry(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }

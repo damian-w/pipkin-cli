@@ -38,9 +38,9 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 				running:  func() (int, error) { return 42, nil },
 				snapshot: noAutostartSnapshot,
 				stop:     func() error { events = append(events, "stop"); return nil },
-				register: func() (string, error) {
+				register: func() error {
 					events = append(events, "register")
-					return "test startup", nil
+					return nil
 				},
 				authorize: func() {
 					authorizeInstalledHelperWithNoticeFor("darwin", func() bool { return true }, func(command *exec.Cmd) error {
@@ -60,9 +60,8 @@ func TestUpdateActivationAuthorizesInstalledReplacementBeforeStart(t *testing.T)
 					return nil
 				},
 			}
-			mechanism, err := activateBinaries(staged, actions)
-			if err != nil || mechanism != "test startup" {
-				t.Fatalf("activation = %q, %v", mechanism, err)
+			if err := activateBinaries(staged, actions); err != nil {
+				t.Fatalf("activation = %v", err)
 			}
 			if !slices.Equal(events, []string{"stop", "register", "authorize", "configure", "start"}) {
 				t.Fatalf("activation order = %v", events)

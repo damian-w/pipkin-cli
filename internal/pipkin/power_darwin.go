@@ -252,7 +252,7 @@ func (m *darwinPowerMonitor) postDisplayState(asleep bool) {
 		state |= 2
 	}
 	previous := m.displayLastPosted.Swap(state)
-	if previous != state && !postPowerEvent(m.ctx, m.events, powerDisplaySleep, asleep, false) {
+	if previous != state && !postPowerEvent(m.ctx, m.events, powerDisplaySleep, asleep) {
 		// Retrying on a subsequent poll is safe if delivery was temporarily full.
 		m.displayLastPosted.CompareAndSwap(state, previous)
 	}
@@ -296,7 +296,7 @@ func darwinWillPowerOff(self objc.ID, _ objc.SEL, _ objc.ID) {
 		// matching cancellation notification. If our process survives, recover
 		// after a short grace so cancelling the request cannot latch sleep.
 		m.shutdownDeadline.Store(time.Now().Add(10 * time.Second).UnixNano())
-		postPowerEvent(m.ctx, m.events, powerShutdown, true, true)
+		postPowerEvent(m.ctx, m.events, powerShutdown, true)
 	}
 }
 
@@ -306,7 +306,7 @@ func (m *darwinPowerMonitor) recoverCancelledShutdown(now time.Time) {
 		return
 	}
 	m.reconcileDisplays()
-	postPowerEvent(m.ctx, m.events, powerShutdown, false, false)
+	postPowerEvent(m.ctx, m.events, powerShutdown, false)
 }
 
 func darwinSystemPowerChanged(id uintptr, _ uint32, message uint32, argument uintptr) {
@@ -326,12 +326,12 @@ func (m *darwinPowerMonitor) systemPowerChanged(message uint32, argument uintptr
 		defer m.api.allowPowerChange(m.rootPort, argument)
 		m.systemSleeping.Store(true)
 		m.displaySleeping.Store(true)
-		postPowerEvent(m.ctx, m.events, powerSystemSleep, true, true)
+		postPowerEvent(m.ctx, m.events, powerSystemSleep, true)
 	case darwinSystemHasPoweredOn:
 		// macOS may wake for maintenance with displays still off. Reconcile
 		// those first so clearing system sleep cannot wake Pipkin in a dark wake.
 		m.systemSleeping.Store(false)
 		m.reconcileDisplays()
-		postPowerEvent(m.ctx, m.events, powerSystemSleep, false, false)
+		postPowerEvent(m.ctx, m.events, powerSystemSleep, false)
 	}
 }

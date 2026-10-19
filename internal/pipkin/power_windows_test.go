@@ -98,6 +98,7 @@ func (platform *fakeWindowsPowerPlatform) openWindow(token uintptr) (uintptr, fu
 		return 0, nil, errors.New("open failed")
 	}
 	platform.window = token
+	platform.loopStarted = make(chan struct{})
 	platform.refresh = make(chan struct{}, 1)
 	return token, func() { platform.calls = append(platform.calls, "close") }, nil
 }
@@ -132,7 +133,7 @@ func (platform *fakeWindowsPowerPlatform) subscribeDisplay(subscription *windows
 		}
 	}
 	if initial == nil {
-		initial = &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 1}
+		initial = windowsDisplaySetting(1)
 	}
 	if deliver == nil {
 		windowsPowerNotification(subscription.Context, windowsPowerSettingChange, initial)
@@ -151,12 +152,13 @@ func (platform *fakeWindowsPowerPlatform) subscribeDisplay(subscription *windows
 	return func() { platform.calls = append(platform.calls, "undisplay") }, nil
 }
 
+func windowsDisplaySetting(state uint32) *windowsPowerSetting {
+	return &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: state}
+}
+
 func TestWindowsPowerMonitorReceivesInitialDisplayState(t *testing.T) {
 	events := make(chan powerEvent, 8)
-	platform := &fakeWindowsPowerPlatform{
-		loopStarted:    make(chan struct{}),
-		initialDisplay: &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 0},
-	}
+	platform := &fakeWindowsPowerPlatform{initialDisplay: windowsDisplaySetting(0)}
 	stop, err := startWindowsPowerMonitor(context.Background(), events, platform)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +176,7 @@ func TestWindowsPowerMonitorReceivesInitialDisplayState(t *testing.T) {
 
 func TestWindowsShutdownNotificationWaitsForReport(t *testing.T) {
 	events := make(chan powerEvent, 8)
-	platform := &fakeWindowsPowerPlatform{loopStarted: make(chan struct{})}
+	platform := &fakeWindowsPowerPlatform{}
 	stop, err := startWindowsPowerMonitor(context.Background(), events, platform)
 	if err != nil {
 		t.Fatal(err)
@@ -197,20 +199,16 @@ func TestWindowsShutdownNotificationWaitsForReport(t *testing.T) {
 		windowsPowerWindowMessage(platform.window, windowsEndSession, 1, 0)
 		close(returned)
 	}()
-	select {
-	case event := <-events:
-		if event.kind != powerShutdown || !event.active || event.done == nil {
-			t.Fatalf("committed shutdown event = %+v", event)
-		}
-		select {
-		case <-returned:
-			t.Fatal("shutdown callback returned before the helper acknowledged the report")
-		default:
-		}
-		close(event.done)
-	case <-time.After(time.Second):
-		t.Fatal("committed shutdown was not delivered")
+	event := nextPowerEvent(t, events)
+	if event.kind != powerShutdown || !event.active || event.done == nil {
+		t.Fatalf("committed shutdown event = %+v", event)
 	}
+	select {
+	case <-returned:
+		t.Fatal("shutdown callback returned before the helper acknowledged the report")
+	default:
+	}
+	close(event.done)
 	select {
 	case <-returned:
 	case <-time.After(time.Second):
@@ -289,12 +287,11 @@ func TestWindowsDisplayRenewalRetryDeadline(t *testing.T) {
 func TestWindowsDisplayRenewalFailureRecoversWithoutAnotherResume(t *testing.T) {
 	events := make(chan powerEvent, 16)
 	replies := make(chan fakeWindowsDisplayReply, 3)
-	replies <- fakeWindowsDisplayReply{setting: &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 1}}
+	replies <- fakeWindowsDisplayReply{setting: windowsDisplaySetting(1)}
 	replies <- fakeWindowsDisplayReply{fail: true}
-	replies <- fakeWindowsDisplayReply{setting: &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 1}}
+	replies <- fakeWindowsDisplayReply{setting: windowsDisplaySetting(1)}
 	platform := &fakeWindowsPowerPlatform{
-		loopStarted: make(chan struct{}), displayReplies: replies,
-		displayAttempted: make(chan uintptr, 3), displayRegistered: make(chan uintptr, 2),
+		displayReplies: replies, displayAttempted: make(chan uintptr, 3), displayRegistered: make(chan uintptr, 2),
 	}
 	stop, err := startWindowsPowerMonitor(context.Background(), events, platform)
 	if err != nil {
@@ -303,11 +300,11 @@ func TestWindowsDisplayRenewalFailureRecoversWithoutAnotherResume(t *testing.T) 
 	defer stop()
 	initialToken := <-platform.displayRegistered
 	state := hostPower{}
-	state.apply(nextWindowsPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
 	applyWindowsSuspend(t, platform.subscription.Context, events, &state)
 	windowsPowerNotification(platform.subscription.Context, windowsPowerResumeAutomatic, nil)
-	state.apply(nextWindowsPowerEvent(t, events))
-	state.apply(nextWindowsPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
 	if !state.asleep() {
 		t.Fatal("renewal failure must keep the unconfirmed display asleep")
 	}
@@ -332,17 +329,6 @@ func TestWindowsDisplayRenewalFailureRecoversWithoutAnotherResume(t *testing.T) 
 	}
 }
 
-func nextWindowsPowerEvent(t *testing.T, events <-chan powerEvent) powerEvent {
-	t.Helper()
-	select {
-	case event := <-events:
-		return event
-	case <-time.After(time.Second):
-		t.Fatal("power event was not delivered")
-		return powerEvent{}
-	}
-}
-
 func applyWindowsSuspend(t *testing.T, token uintptr, events <-chan powerEvent, state *hostPower) {
 	t.Helper()
 	returned := make(chan struct{})
@@ -350,7 +336,7 @@ func applyWindowsSuspend(t *testing.T, token uintptr, events <-chan powerEvent, 
 		windowsPowerNotification(token, windowsPowerSuspend, nil)
 		close(returned)
 	}()
-	event := nextWindowsPowerEvent(t, events)
+	event := nextPowerEvent(t, events)
 	if event.kind != powerSystemSleep || !event.active || event.done == nil {
 		t.Fatalf("suspend notification = %+v", event)
 	}
@@ -363,11 +349,11 @@ func TestWindowsBackgroundResumeWaitsForFreshDisplayState(t *testing.T) {
 	events := make(chan powerEvent, 16)
 	offReady, onReady := make(chan struct{}), make(chan struct{})
 	replies := make(chan fakeWindowsDisplayReply, 3)
-	replies <- fakeWindowsDisplayReply{setting: &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 1}}
-	replies <- fakeWindowsDisplayReply{setting: &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 0}, deliver: offReady}
-	replies <- fakeWindowsDisplayReply{setting: &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 1}, deliver: onReady}
+	replies <- fakeWindowsDisplayReply{setting: windowsDisplaySetting(1)}
+	replies <- fakeWindowsDisplayReply{setting: windowsDisplaySetting(0), deliver: offReady}
+	replies <- fakeWindowsDisplayReply{setting: windowsDisplaySetting(1), deliver: onReady}
 	platform := &fakeWindowsPowerPlatform{
-		loopStarted: make(chan struct{}), displayReplies: replies, displayRegistered: make(chan uintptr, 3),
+		displayReplies: replies, displayRegistered: make(chan uintptr, 3),
 		allowRefresh: make(chan struct{}), refreshEntered: make(chan struct{}),
 	}
 	stop, err := startWindowsPowerMonitor(context.Background(), events, platform)
@@ -377,14 +363,14 @@ func TestWindowsBackgroundResumeWaitsForFreshDisplayState(t *testing.T) {
 	defer stop()
 	sleepToken, oldDisplayToken := platform.subscription.Context, <-platform.displayRegistered
 	state := hostPower{}
-	state.apply(nextWindowsPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
 	if state.asleep() {
 		t.Fatal("initial display-on state must be awake")
 	}
 	applyWindowsSuspend(t, sleepToken, events, &state)
 	windowsPowerNotification(sleepToken, windowsPowerResumeAutomatic, nil)
 	for _, want := range []powerEvent{{kind: powerDisplaySleep, active: true}, {kind: powerSystemSleep}} {
-		event := nextWindowsPowerEvent(t, events)
+		event := nextPowerEvent(t, events)
 		if event.kind != want.kind || event.active != want.active {
 			t.Fatalf("resume ordering = %+v, want %+v", event, want)
 		}
@@ -400,7 +386,7 @@ func TestWindowsBackgroundResumeWaitsForFreshDisplayState(t *testing.T) {
 	}
 	// The previous registration still exists while renewal waits, but its
 	// pre-suspend display-on observation must no longer be allowed to wake.
-	windowsPowerNotification(oldDisplayToken, windowsPowerSettingChange, &windowsPowerSetting{GUID: windowsSessionDisplayStatus, Length: 4, State: 1})
+	windowsPowerNotification(oldDisplayToken, windowsPowerSettingChange, windowsDisplaySetting(1))
 	select {
 	case event := <-events:
 		t.Fatalf("stale display registration delivered %+v", event)
@@ -409,21 +395,21 @@ func TestWindowsBackgroundResumeWaitsForFreshDisplayState(t *testing.T) {
 	close(platform.allowRefresh)
 	offToken := <-platform.displayRegistered
 	close(offReady)
-	state.apply(nextWindowsPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
 	if !state.asleep() {
 		t.Fatal("confirmed screens-off state must keep background resume asleep")
 	}
 	// A foreground resume renews again. Its delayed current on state must
 	// clear the gate even if Windows never emitted a separate on transition.
 	windowsPowerNotification(sleepToken, windowsPowerResume, nil)
-	state.apply(nextWindowsPowerEvent(t, events))
-	state.apply(nextWindowsPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
 	onToken := <-platform.displayRegistered
 	if !state.asleep() {
 		t.Fatal("foreground resume woke before fresh display state arrived")
 	}
 	close(onReady)
-	state.apply(nextWindowsPowerEvent(t, events))
+	state.apply(nextPowerEvent(t, events))
 	if state.asleep() {
 		t.Fatal("fresh display-on state did not clear the resume gate")
 	}
@@ -439,7 +425,7 @@ func TestWindowsCancelledSuspendRecoversWithoutDisplayTransition(t *testing.T) {
 	for _, resume := range []uint32{windowsPowerResumeAutomatic, windowsPowerResume} {
 		t.Run(fmt.Sprintf("resume-%d", resume), func(t *testing.T) {
 			events := make(chan powerEvent, 16)
-			platform := &fakeWindowsPowerPlatform{loopStarted: make(chan struct{}), displayRegistered: make(chan uintptr, 2)}
+			platform := &fakeWindowsPowerPlatform{displayRegistered: make(chan uintptr, 2)}
 			stop, err := startWindowsPowerMonitor(context.Background(), events, platform)
 			if err != nil {
 				t.Fatal(err)
@@ -447,11 +433,11 @@ func TestWindowsCancelledSuspendRecoversWithoutDisplayTransition(t *testing.T) {
 			defer stop()
 			initialToken := <-platform.displayRegistered
 			state := hostPower{}
-			state.apply(nextWindowsPowerEvent(t, events))
+			state.apply(nextPowerEvent(t, events))
 			applyWindowsSuspend(t, platform.subscription.Context, events, &state)
 			windowsPowerNotification(platform.subscription.Context, resume, nil)
 			for i := 0; i < 3; i++ {
-				state.apply(nextWindowsPowerEvent(t, events))
+				state.apply(nextPowerEvent(t, events))
 			}
 			if token := <-platform.displayRegistered; token == initialToken {
 				t.Fatal("resume did not renew the display subscription")
@@ -492,7 +478,7 @@ func TestWindowsPowerMonitorCancellationAndLateCallbacks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events := make(chan powerEvent, 8)
-	platform := &fakeWindowsPowerPlatform{loopStarted: make(chan struct{})}
+	platform := &fakeWindowsPowerPlatform{}
 	stop, err := startWindowsPowerMonitor(ctx, events, platform)
 	if err != nil {
 		t.Fatal(err)
@@ -510,15 +496,11 @@ func TestWindowsPowerMonitorCancellationAndLateCallbacks(t *testing.T) {
 		windowsPowerNotification(token, windowsPowerSuspend, nil)
 		close(callbackReturned)
 	}()
-	select {
-	case event := <-events:
-		if event.kind != powerSystemSleep || !event.active || event.done == nil {
-			t.Fatalf("suspend = %+v", event)
-		}
-		close(event.done)
-	case <-time.After(time.Second):
-		t.Fatal("registered callback did not deliver suspend")
+	event := nextPowerEvent(t, events)
+	if event.kind != powerSystemSleep || !event.active || event.done == nil {
+		t.Fatalf("suspend = %+v", event)
 	}
+	close(event.done)
 	<-callbackReturned
 	cancel()
 	stop()
@@ -542,9 +524,7 @@ func TestWindowsPowerMonitorWaitsForAsynchronousInitialDisplay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events := make(chan powerEvent, 8)
-	platform := &fakeWindowsPowerPlatform{
-		loopStarted: make(chan struct{}), deliverInitial: make(chan struct{}), subscribed: make(chan struct{}),
-	}
+	platform := &fakeWindowsPowerPlatform{deliverInitial: make(chan struct{}), subscribed: make(chan struct{})}
 	type result struct {
 		stop func()
 		err  error
@@ -591,7 +571,7 @@ func TestWindowsPowerMonitorWaitsForAsynchronousInitialDisplay(t *testing.T) {
 
 func TestWindowsPowerMonitorLateDisplayOverridesStartupFallback(t *testing.T) {
 	events := make(chan powerEvent, 8)
-	platform := &fakeWindowsPowerPlatform{loopStarted: make(chan struct{}), deliverInitial: make(chan struct{})}
+	platform := &fakeWindowsPowerPlatform{deliverInitial: make(chan struct{})}
 	stop, err := startWindowsPowerMonitor(context.Background(), events, platform)
 	if err != nil {
 		close(platform.deliverInitial)
@@ -607,13 +587,8 @@ func TestWindowsPowerMonitorLateDisplayOverridesStartupFallback(t *testing.T) {
 		t.Fatal("unknown initial display state was not queued before readiness")
 	}
 	close(platform.deliverInitial)
-	select {
-	case event := <-events:
-		if event.kind != powerDisplaySleep || event.active {
-			t.Fatalf("late confirmed display-on state = %+v", event)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("late display state did not replace the conservative fallback")
+	if event := nextPowerEvent(t, events); event.kind != powerDisplaySleep || event.active {
+		t.Fatalf("late confirmed display-on state = %+v", event)
 	}
 }
 

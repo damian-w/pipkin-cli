@@ -42,10 +42,10 @@ func desktopArgument(value string) string {
 	return strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(quoted)
 }
 
-func registerAutostart() (string, error) {
+func registerAutostart() error {
 	dir, err := resolvedAppDir()
 	if err != nil {
-		return "", err
+		return err
 	}
 	if hasSystemd() {
 		// env avoids systemd's restrictions on characters in the executable token.
@@ -53,22 +53,22 @@ func registerAutostart() (string, error) {
 		unit := fmt.Sprintf("[Unit]\nDescription=Pipkin display helper\n\n[Service]\nExecStart=%s\n"+
 			"Restart=on-failure\nRestartSec=10\nNice=10\n\n[Install]\nWantedBy=default.target\n", command)
 		if err := writeFileAtomic(systemdUnitPath(), []byte(unit), 0o644); err != nil {
-			return "", err
+			return err
 		}
 		if err := systemctl("daemon-reload"); err != nil {
-			return "", err
+			return err
 		}
 		if err := systemctl("enable", systemdUnit); err != nil {
-			return "", err
+			return err
 		}
 		if err := removeIfExists(desktopEntryPath()); err != nil {
-			return "", err
+			return err
 		}
-		return "a systemd user service", nil
+		return nil
 	}
 	command := desktopArgument(serviceBinary()) + " run --home " + desktopArgument(dir)
 	entry := "[Desktop Entry]\nType=Application\nName=Pipkin helper\nNoDisplay=true\nExec=" + command + "\n"
-	return "a desktop autostart entry", writeFileAtomic(desktopEntryPath(), []byte(entry), 0o644)
+	return writeFileAtomic(desktopEntryPath(), []byte(entry), 0o644)
 }
 
 func snapshotAutostart() (func() error, error) {

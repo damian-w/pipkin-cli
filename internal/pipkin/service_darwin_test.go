@@ -18,7 +18,7 @@ func isolateDarwinService(t *testing.T) {
 
 func TestDarwinAutostartPersistsHomeAsXMLArgument(t *testing.T) {
 	isolateDarwinService(t)
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(launchAgentPath())
@@ -43,7 +43,7 @@ func TestDarwinAutostartPersistsHomeAsXMLArgument(t *testing.T) {
 
 func TestDarwinStartAcceptsSuccessfulKickstart(t *testing.T) {
 	isolateDarwinService(t)
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	bootstrapErr, kickstartErr := errors.New("already loaded"), errors.New("kickstart failed")
@@ -71,7 +71,7 @@ func TestDarwinStartAcceptsSuccessfulKickstart(t *testing.T) {
 
 func TestDarwinStopAcceptsAlreadyUnloadedService(t *testing.T) {
 	isolateDarwinService(t)
-	if _, err := registerAutostart(); err != nil {
+	if err := registerAutostart(); err != nil {
 		t.Fatal(err)
 	}
 	serviceCommand = func(string, ...string) error { return errors.New("bootout: No such process") }

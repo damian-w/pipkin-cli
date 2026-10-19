@@ -276,7 +276,7 @@ func (r *binaryReplacement) finish() {
 type installationActions struct {
 	running                  func() (int, error)
 	stop, start              func() error
-	register                 func() (string, error)
+	register                 func() error
 	snapshot                 func() (func() error, error)
 	configure, undoConfigure func() error
 	authorize                func()
@@ -287,17 +287,17 @@ func helperInstallationActions() installationActions {
 		register: registerAutostart, snapshot: snapshotAutostart}
 }
 
-func activateBinaries(staged *stagedBinaries, actions installationActions) (string, error) {
+func activateBinaries(staged *stagedBinaries, actions installationActions) error {
 	if err := staged.validateTargets(); err != nil {
-		return "", err
+		return err
 	}
 	pid, err := actions.running()
 	if err != nil {
-		return "", err
+		return err
 	}
 	restoreRegistration, err := actions.snapshot()
 	if err != nil {
-		return "", fmt.Errorf("could not read previous automatic start: %w", err)
+		return fmt.Errorf("could not read previous automatic start: %w", err)
 	}
 	var replacement *binaryReplacement
 	if err = actions.stop(); err == nil {
@@ -307,13 +307,13 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 		if pid != 0 {
 			err = errors.Join(err, actions.start())
 		}
-		return "", err
+		return err
 	}
 	startAttempted := false
-	fail := func(cause error) (string, error) {
+	fail := func(cause error) error {
 		if startAttempted {
 			if err := actions.stop(); err != nil {
-				return "", errors.Join(cause, fmt.Errorf("could not stop replacement helper; original binaries remain in .old backups: %w", err))
+				return errors.Join(cause, fmt.Errorf("could not stop replacement helper; original binaries remain in .old backups: %w", err))
 			}
 		}
 		if actions.undoConfigure != nil {
@@ -322,7 +322,7 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 			}
 		}
 		if err := replacement.rollback(); err != nil {
-			return "", errors.Join(cause, err)
+			return errors.Join(cause, err)
 		}
 		if err := restoreRegistration(); err != nil {
 			cause = errors.Join(cause, fmt.Errorf("could not restore automatic start: %w", err))
@@ -332,11 +332,10 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 				cause = errors.Join(cause, fmt.Errorf("previous helper could not restart: %w", err))
 			}
 		}
-		return "", cause
+		return cause
 	}
 	// Rewrite startup so it launches the binaries just installed.
-	mechanism, err := actions.register()
-	if err != nil {
+	if err := actions.register(); err != nil {
 		return fail(err)
 	}
 	if actions.authorize != nil {
@@ -352,5 +351,5 @@ func activateBinaries(staged *stagedBinaries, actions installationActions) (stri
 		return fail(err)
 	}
 	replacement.finish()
-	return mechanism, nil
+	return nil
 }

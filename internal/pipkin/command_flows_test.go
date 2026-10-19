@@ -67,13 +67,13 @@ func TestInstallFlowSummarizesAfterActivationAndUsesExactPATHHint(t *testing.T) 
 				hint:    func(args ...string) string { return commandHintFor("darwin", launcher, false, args...) },
 				pathFix: installPathFix("darwin", launcher, false), permissionHint: func() string { return "" },
 			}
-			deps.activate = func(_ *stagedBinaries, actions installationActions) (string, error) {
+			deps.activate = func(_ *stagedBinaries, actions installationActions) error {
 				events = append(events, "activate")
 				actions.authorize()
 				if err := actions.configure(); err != nil {
 					t.Fatal(err)
 				}
-				return "synthetic startup", nil
+				return nil
 			}
 			if err := runInstallCommand(&output, deps); err != nil {
 				t.Fatal(err)
@@ -109,9 +109,9 @@ func TestInstallFlowConfigFailurePreservesBackupAndDoesNotActivate(t *testing.T)
 		stage:           func() (*stagedBinaries, error) { return &stagedBinaries{folder: t.TempDir()}, nil },
 		launcherMissing: func() (bool, error) { return false, nil },
 		config:          func() (Config, string, error) { return Config{}, "/synthetic/backup", want },
-		activate: func(*stagedBinaries, installationActions) (string, error) {
+		activate: func(*stagedBinaries, installationActions) error {
 			t.Fatal("invalid config activated binaries")
-			return "", nil
+			return nil
 		},
 	}
 	var output bytes.Buffer
@@ -152,13 +152,13 @@ func TestUpdateFlowAdvisesInBothSuccessBranchesWithoutChangingActivation(t *test
 					events = append(events, "authorize")
 					fmt.Fprintln(out, "Synthetic authorization warning")
 				},
-				activate: func(_ *stagedBinaries, actions installationActions) (string, error) {
+				activate: func(_ *stagedBinaries, actions installationActions) error {
 					events = append(events, "activate")
 					actions.authorize()
 					if strings.Contains(output.String(), "Synthetic authorization") {
 						t.Fatal("authorization warning escaped before success")
 					}
-					return "synthetic", nil
+					return nil
 				},
 				advisory: func(io.Writer) { events = append(events, "advisory") },
 			}

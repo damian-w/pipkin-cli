@@ -216,12 +216,12 @@ func TestActivationFailureRestoresServiceAndRunningHelper(t *testing.T) {
 					return func() error { events = append(events, "restore "+previous); return nil }, nil
 				},
 				stop: func() error { events = append(events, "stop"); return nil },
-				register: func() (string, error) {
+				register: func() error {
 					events = append(events, "register "+service())
 					if failure == "registration" && service() == "console" {
-						return "", errors.New("registration failed")
+						return errors.New("registration failed")
 					}
-					return "test service", nil
+					return nil
 				},
 				configure: func() error {
 					events = append(events, "configure")
@@ -239,7 +239,7 @@ func TestActivationFailureRestoresServiceAndRunningHelper(t *testing.T) {
 					return nil
 				},
 			}
-			if _, err := activateBinaries(staged, actions); err == nil {
+			if err := activateBinaries(staged, actions); err == nil {
 				t.Fatal("activation unexpectedly succeeded")
 			}
 			checkTestBinary(t, filepath.Join(target, "pipkin.exe"), "old console")
@@ -255,19 +255,17 @@ func TestFailedFreshInstallRemovesAutostart(t *testing.T) {
 	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, nil)
 	unregistered, configured, unconfigured := false, false, false
 	actions := installationActions{
-		running: func() (int, error) { return 0, nil },
-		stop:    func() error { return nil },
-		start:   func() error { return errors.New("startup failed") },
-		register: func() (string, error) {
-			return "test service", nil
-		},
+		running:  func() (int, error) { return 0, nil },
+		stop:     func() error { return nil },
+		start:    func() error { return errors.New("startup failed") },
+		register: func() error { return nil },
 		snapshot: func() (func() error, error) {
 			return func() error { unregistered = true; return nil }, nil
 		},
 		configure:     func() error { configured = true; return nil },
 		undoConfigure: func() error { unconfigured = true; return nil },
 	}
-	if _, err := activateBinaries(staged, actions); err == nil {
+	if err := activateBinaries(staged, actions); err == nil {
 		t.Fatal("fresh install unexpectedly succeeded")
 	}
 	if !unregistered {
@@ -349,9 +347,9 @@ func TestStoppedReplacementFailurePreservesBackup(t *testing.T) {
 			return nil
 		},
 		start:    func() error { return errors.New("startup readiness failed") },
-		register: func() (string, error) { return "test service", nil },
+		register: func() error { return nil },
 	}
-	if _, err := activateBinaries(staged, actions); err == nil || !strings.Contains(err.Error(), ".old backups") {
+	if err := activateBinaries(staged, actions); err == nil || !strings.Contains(err.Error(), ".old backups") {
 		t.Fatalf("unsafe recovery failure was hidden: %v", err)
 	}
 	checkTestBinary(t, filepath.Join(target, "pipkin.old"), "old console")
@@ -362,7 +360,7 @@ func TestUpgradePreservesOnlyRecoveryCopy(t *testing.T) {
 	staged, target := stageTestInstall(t, "linux", map[string]string{"pipkin": "new console"}, map[string]string{"pipkin.old": "only working executable"})
 	stopped := false
 	actions := installationActions{stop: func() error { stopped = true; return nil }}
-	if _, err := activateBinaries(staged, actions); err == nil || !strings.Contains(err.Error(), "recovery backup") {
+	if err := activateBinaries(staged, actions); err == nil || !strings.Contains(err.Error(), "recovery backup") {
 		t.Fatalf("sole recovery backup was not protected: %v", err)
 	}
 	if stopped {
@@ -402,12 +400,12 @@ func TestUpdateRefreshesNewWindowlessService(t *testing.T) {
 		running:  func() (int, error) { return 123, nil },
 		snapshot: noAutostartSnapshot,
 		stop:     func() error { return nil },
-		register: func() (string, error) {
+		register: func() error {
 			if service() != "companion" {
 				t.Fatal("startup still selects the old console executable")
 			}
 			registered = true
-			return "test service", nil
+			return nil
 		},
 		start: func() error {
 			if !registered {
@@ -419,7 +417,7 @@ func TestUpdateRefreshesNewWindowlessService(t *testing.T) {
 			return nil
 		},
 	}
-	if _, err := activateBinaries(staged, actions); err != nil {
+	if err := activateBinaries(staged, actions); err != nil {
 		t.Fatal(err)
 	}
 	if !started {
@@ -441,9 +439,9 @@ func TestRollbackPreservesAbsentAutostartWithInstalledBinary(t *testing.T) {
 			return func() error { registration = previous; return nil }, nil
 		},
 		stop: func() error { return nil },
-		register: func() (string, error) {
+		register: func() error {
 			registration = "new automatic startup"
-			return registration, nil
+			return nil
 		},
 		start: func() error {
 			data, err := os.ReadFile(filepath.Join(target, "pipkin"))
@@ -463,7 +461,7 @@ func TestRollbackPreservesAbsentAutostartWithInstalledBinary(t *testing.T) {
 			return nil
 		},
 	}
-	if _, err := activateBinaries(staged, actions); err == nil {
+	if err := activateBinaries(staged, actions); err == nil {
 		t.Fatal("update unexpectedly succeeded")
 	}
 	if !restarted || registration != "" {
@@ -479,7 +477,7 @@ func TestAutostartSnapshotFailureLeavesHelperRunning(t *testing.T) {
 		snapshot: func() (func() error, error) { return nil, errors.New("startup definition unreadable") },
 		stop:     func() error { stopped = true; return nil },
 	}
-	if _, err := activateBinaries(staged, actions); err == nil {
+	if err := activateBinaries(staged, actions); err == nil {
 		t.Fatal("continued without a readable startup snapshot")
 	}
 	if stopped {

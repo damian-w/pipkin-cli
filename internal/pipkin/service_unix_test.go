@@ -1,10 +1,11 @@
+//go:build darwin || linux
+
 package pipkin
 
 import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -44,15 +45,12 @@ func TestStartupFileRestorePreservesPriorAbsenceAndContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0600 {
 		t.Fatalf("restored mode = %v", info.Mode())
 	}
 }
 
 func TestStartupFileRestorePreservesSymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation can require administrator privileges")
-	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "startup")
 	if err := os.Symlink("original-target", path); err != nil {

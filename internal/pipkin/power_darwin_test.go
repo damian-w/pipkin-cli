@@ -103,26 +103,24 @@ func darwinFakeDisplayAPI(asleep uint32) *darwinPowerAPI {
 	}
 }
 
-func TestDarwinDarkWakeReconcilesBeforeResume(t *testing.T) {
-	events := make(chan powerEvent, 4)
-	m := &darwinPowerMonitor{ctx: context.Background(), events: events, api: darwinFakeDisplayAPI(1)}
-	m.systemPowerChanged(darwinSystemHasPoweredOn, 0)
-	first, second := <-events, <-events
-	if first.kind != powerDisplaySleep || !first.active || second.kind != powerSystemSleep || second.active {
-		t.Fatalf("resume order can wake Pipkin with sleeping screens: %#v, %#v", first, second)
-	}
-}
-
-func TestDarwinResumePreservesSleepWhenWindowServerUnavailable(t *testing.T) {
-	events := make(chan powerEvent, 4)
-	api := darwinFakeDisplayAPI(0)
-	api.onlineDisplays = func(uint32, *uint32, *uint32) int32 { return 1000 }
-	m := &darwinPowerMonitor{ctx: context.Background(), events: events, api: api}
-	m.displaySleeping.Store(true)
-	m.systemPowerChanged(darwinSystemHasPoweredOn, 0)
-	first, second := <-events, <-events
-	if first.kind != powerDisplaySleep || !first.active || second.kind != powerSystemSleep || second.active {
-		t.Fatalf("failed screen query could wake Pipkin during maintenance: %#v, %#v", first, second)
+func TestDarwinResumeKeepsSleepingScreensBeforeClearingSystemSleep(t *testing.T) {
+	unavailable := darwinFakeDisplayAPI(0)
+	unavailable.onlineDisplays = func(uint32, *uint32, *uint32) int32 { return 1000 }
+	for name, test := range map[string]struct {
+		api         *darwinPowerAPI
+		wasSleeping bool
+	}{
+		"dark wake":                {darwinFakeDisplayAPI(1), false},
+		"WindowServer unavailable": {unavailable, true},
+	} {
+		events := make(chan powerEvent, 4)
+		m := &darwinPowerMonitor{ctx: context.Background(), events: events, api: test.api}
+		m.displaySleeping.Store(test.wasSleeping)
+		m.systemPowerChanged(darwinSystemHasPoweredOn, 0)
+		first, second := nextPowerEvent(t, events), nextPowerEvent(t, events)
+		if first.kind != powerDisplaySleep || !first.active || second.kind != powerSystemSleep || second.active {
+			t.Fatalf("%s: resume order can wake Pipkin with sleeping screens: %#v, %#v", name, first, second)
+		}
 	}
 }
 
@@ -156,7 +154,7 @@ func TestDarwinDisplayQueryCannotUndoPendingSystemSleep(t *testing.T) {
 	m.systemSleeping.Store(true)
 	m.displaySleeping.Store(true)
 	m.reconcileDisplays()
-	if event := <-events; event.kind != powerDisplaySleep || !event.active {
+	if event := nextPowerEvent(t, events); event.kind != powerDisplaySleep || !event.active {
 		t.Fatalf("pending system sleep screen state: %#v", event)
 	}
 }
@@ -171,7 +169,7 @@ func TestDarwinCancelledShutdownRecovery(t *testing.T) {
 		t.Fatal("shutdown recovered before grace elapsed")
 	}
 	m.recoverCancelledShutdown(deadline)
-	first, second := <-events, <-events
+	first, second := nextPowerEvent(t, events), nextPowerEvent(t, events)
 	if first.kind != powerDisplaySleep || !first.active || second.kind != powerShutdown || second.active {
 		t.Fatalf("shutdown recovery did not preserve sleeping screens: %#v, %#v", first, second)
 	}

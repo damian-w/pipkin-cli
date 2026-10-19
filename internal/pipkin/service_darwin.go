@@ -17,10 +17,10 @@ func launchAgentPath() string {
 
 func launchDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
 
-func registerAutostart() (string, error) {
+func registerAutostart() error {
 	dir, err := resolvedAppDir()
 	if err != nil {
-		return "", err
+		return err
 	}
 	plist := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,17 +34,14 @@ func registerAutostart() (string, error) {
 <key>Nice</key><integer>10</integer>
 </dict></plist>
 `
-	return "a launchd login agent", writeFileAtomic(launchAgentPath(), []byte(plist), 0o644)
+	return writeFileAtomic(launchAgentPath(), []byte(plist), 0o644)
 }
 
 func removeAutostart() error { return removeIfExists(launchAgentPath()) }
 
 func snapshotAutostart() (func() error, error) {
 	state, err := captureStartupFile(launchAgentPath())
-	if err != nil {
-		return nil, err
-	}
-	return state.restore, nil
+	return state.restore, err
 }
 
 func startService() error {

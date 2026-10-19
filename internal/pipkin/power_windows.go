@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -41,7 +40,6 @@ var (
 	procDestroyWindow      = user32.NewProc("DestroyWindow")
 	procMsgWaitForMultiple = user32.NewProc("MsgWaitForMultipleObjectsEx")
 	procPeekMessage        = user32.NewProc("PeekMessageW")
-	procTranslateMessage   = user32.NewProc("TranslateMessage")
 	procDispatchMessage    = user32.NewProc("DispatchMessageW")
 	windowsPowerMonitors   sync.Map
 	windowsPowerWindows    sync.Map
@@ -159,7 +157,7 @@ func startWindowsPowerMonitor(ctx context.Context, events chan<- powerEvent, pla
 			// until Windows supplies a confirmed state, without blocking startup.
 			monitor.displayMu.Lock()
 			if !monitor.displayKnown {
-				postPowerEvent(ctx, events, powerDisplaySleep, true, false)
+				postPowerEvent(ctx, events, powerDisplaySleep, true)
 				logf("initial host display state is delayed; waiting with Pipkin asleep")
 			}
 			monitor.displayMu.Unlock()
@@ -191,7 +189,7 @@ func windowsPowerNotification(token uintptr, eventType uint32, setting *windowsP
 				monitor.displayMu.Unlock()
 				return 0
 			}
-			if postPowerEvent(monitor.ctx, monitor.events, kind, active, false) && !monitor.displayKnown {
+			if postPowerEvent(monitor.ctx, monitor.events, kind, active) && !monitor.displayKnown {
 				monitor.displayKnown = true
 				monitor.displayOnce.Do(func() { close(monitor.displayReady) })
 			}
@@ -204,10 +202,10 @@ func windowsPowerNotification(token uintptr, eventType uint32, setting *windowsP
 				monitor.displayMu.Lock()
 				monitor.displayGeneration++
 				monitor.displayKnown = false
-				postPowerEvent(monitor.ctx, monitor.events, powerDisplaySleep, true, false)
+				postPowerEvent(monitor.ctx, monitor.events, powerDisplaySleep, true)
 				monitor.displayMu.Unlock()
 			}
-			postPowerEvent(monitor.ctx, monitor.events, kind, active, active)
+			postPowerEvent(monitor.ctx, monitor.events, kind, active)
 			if !active && monitor.ctx.Err() == nil {
 				if err := monitor.refreshDisplay(); err != nil {
 					logf("could not refresh host display state after resume: %v", err)
@@ -261,7 +259,7 @@ func windowsPowerWindowMessage(window uintptr, message uint32, wparam, lparam ui
 		if windowsCommittedShutdown(wparam, lparam) {
 			if value, ok := windowsPowerWindows.Load(window); ok {
 				monitor := value.(*windowsPowerMonitor)
-				postPowerEvent(monitor.ctx, monitor.events, powerShutdown, true, true)
+				postPowerEvent(monitor.ctx, monitor.events, powerShutdown, true)
 			}
 		}
 		return 0
@@ -374,7 +372,7 @@ func (platform *nativeWindowsPowerPlatform) subscribeSleep(subscription *windows
 	var handle windows.Handle
 	result, _, _ := register.Call(2, uintptr(unsafe.Pointer(subscription)), uintptr(unsafe.Pointer(&handle)))
 	if result != 0 {
-		return nil, fmt.Errorf("subscribe to system sleep: %w", syscall.Errno(result))
+		return nil, fmt.Errorf("subscribe to system sleep: %w", windows.Errno(result))
 	}
 	return func() { powrprof.NewProc("PowerUnregisterSuspendResumeNotification").Call(uintptr(handle)) }, nil
 }
@@ -387,7 +385,7 @@ func (platform *nativeWindowsPowerPlatform) subscribeDisplay(subscription *windo
 	var handle windows.Handle
 	result, _, _ := register.Call(uintptr(unsafe.Pointer(&windowsSessionDisplayStatus)), 2, uintptr(unsafe.Pointer(subscription)), uintptr(unsafe.Pointer(&handle)))
 	if result != 0 {
-		return nil, fmt.Errorf("subscribe to display sleep: %w", syscall.Errno(result))
+		return nil, fmt.Errorf("subscribe to display sleep: %w", windows.Errno(result))
 	}
 	return func() { powrprof.NewProc("PowerSettingUnregisterNotification").Call(uintptr(handle)) }, nil
 }
@@ -428,7 +426,6 @@ func (platform *nativeWindowsPowerPlatform) runMessages(ctx context.Context, ref
 				if message.Message == windowsQuit {
 					return nil
 				}
-				procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
 				procDispatchMessage.Call(uintptr(unsafe.Pointer(&message)))
 			}
 		default:

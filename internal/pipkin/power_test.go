@@ -92,40 +92,46 @@ func TestPowerEventAcknowledgesAfterBoundedSerialAttempt(t *testing.T) {
 	}
 }
 
-func TestPreSleepConfirmationRequiresAcceptedSequence(t *testing.T) {
-	h, _ := testHelper()
-	port := &fakePort{incoming: []byte("v=2 kind=identity product=pipkin seq=0 clock_epoch=0 unix=null\n")}
-	h.conn = &connection{port: port, name: "COM1"}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if h.confirmHostPower(ctx, 1) || ctx.Err() == nil {
-		t.Fatal("an old identity response acknowledged a newer sleep report")
-	}
-	port.incoming = []byte("v=2 kind=identity product=pipkin seq=1 clock_epoch=0 unix=null\n")
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if !h.confirmHostPower(ctx, 1) || ctx.Err() != nil || len(port.written) != 2 {
-		t.Fatal("firmware's accepted sleep sequence did not confirm delivery")
+func nextPowerEvent(t *testing.T, events <-chan powerEvent) powerEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("power event was not delivered")
+		return powerEvent{}
 	}
 }
 
-func TestSleepConfirmationRejectsAheadSequenceOrChangedEpoch(t *testing.T) {
-	for _, reply := range []string{
-		"v=2 kind=identity product=pipkin seq=10 clock_epoch=0 unix=null\n",
-		"v=2 kind=identity product=pipkin seq=1 clock_epoch=1 unix=null\n",
+func TestSleepConfirmationRequiresAcceptedSequenceAndEpoch(t *testing.T) {
+	for _, test := range []struct {
+		reply                           string
+		timeout                         time.Duration
+		confirmed, timedOut, reidentify bool
+		sequence                        uint64
+	}{
+		// An old identity response never acknowledges a newer sleep report.
+		{"seq=0 clock_epoch=0", 20 * time.Millisecond, false, true, false, 1},
+		{"seq=1 clock_epoch=0", time.Second, true, false, false, 1},
+		// An unrelated identity schedules USB verification instead, and keeps
+		// firmware's higher sequence so later wake reports are not rejected.
+		{"seq=10 clock_epoch=0", time.Second, false, false, true, 10},
+		{"seq=1 clock_epoch=1", time.Second, false, false, true, 1},
 	} {
 		h, _ := testHelper()
 		h.sequence = 1
 		h.due["identify"] = h.now().Add(time.Minute)
-		h.conn = &connection{port: &fakePort{incoming: []byte(reply)}, name: "COM1"}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		port := &fakePort{incoming: []byte("v=2 kind=identity product=pipkin " + test.reply + " unix=null\n")}
+		h.conn = &connection{port: port, name: "COM1"}
+		ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
 		confirmed := h.confirmHostPower(ctx, 1)
+		timedOut := ctx.Err() != nil
 		cancel()
-		if confirmed || !h.due["identify"].IsZero() {
-			t.Fatalf("unrelated identity confirmed sleep instead of scheduling USB verification: %s", reply)
+		if confirmed != test.confirmed || timedOut != test.timedOut || len(port.written) != 1 {
+			t.Fatalf("%s: confirmed=%t timed out=%t writes=%d", test.reply, confirmed, timedOut, len(port.written))
 		}
-		if strings.Contains(reply, "seq=10") && h.sequence != 10 {
-			t.Fatal("firmware's higher sequence was discarded, which could reject wake reports")
+		if h.due["identify"].IsZero() != test.reidentify || h.sequence != test.sequence {
+			t.Fatalf("%s: identify due=%v sequence=%d", test.reply, h.due["identify"], h.sequence)
 		}
 	}
 }
@@ -264,7 +270,7 @@ func TestNativeEventWaitIsBoundedAndCancellationSafe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	postResult := make(chan bool, 1)
 	events := make(chan powerEvent, 1)
-	go func() { postResult <- postPowerEvent(ctx, events, powerSystemSleep, true, true) }()
+	go func() { postResult <- postPowerEvent(ctx, events, powerSystemSleep, true) }()
 	event := <-events
 	select {
 	case <-postResult:
@@ -276,11 +282,11 @@ func TestNativeEventWaitIsBoundedAndCancellationSafe(t *testing.T) {
 		t.Fatal("acknowledged event was not reported as delivered")
 	}
 	cancel()
-	if postPowerEvent(ctx, make(chan powerEvent), powerShutdown, true, true) {
+	if postPowerEvent(ctx, make(chan powerEvent), powerShutdown, true) {
 		t.Fatal("cancelled observer reported delivery")
 	}
 	started := time.Now()
-	if postPowerEvent(context.Background(), make(chan powerEvent), powerShutdown, true, true) {
+	if postPowerEvent(context.Background(), make(chan powerEvent), powerShutdown, true) {
 		t.Fatal("unconsumed event reported delivery")
 	}
 	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {

@@ -1,11 +1,35 @@
+//go:build darwin || linux
+
 package pipkin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 )
+
+var serviceCommand = runServiceCommand
+
+func runServiceCommand(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s timed out: %w", name, ctx.Err())
+	}
+	if err == nil {
+		return nil
+	}
+	if detail := strings.TrimSpace(string(output)); detail != "" {
+		return fmt.Errorf("%s %s failed: %w: %s", name, strings.Join(args, " "), err, detail)
+	}
+	return fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
+}
 
 type startupFile struct {
 	path    string

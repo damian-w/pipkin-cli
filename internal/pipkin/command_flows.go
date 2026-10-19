@@ -26,7 +26,7 @@ type installCommandDeps struct {
 	launcherMissing    func() (bool, error)
 	config             func() (Config, string, error)
 	actions            installationActions
-	activate           func(*stagedBinaries, installationActions) (string, error)
+	activate           func(*stagedBinaries, installationActions) error
 	configure, undo    func() error
 	authorize          func(io.Writer, io.Writer)
 	hint               func(...string) string
@@ -41,7 +41,7 @@ type updateCommandDeps struct {
 	stage        func(string) (*stagedBinaries, error)
 	config       func() (Config, error)
 	actions      installationActions
-	activate     func(*stagedBinaries, installationActions) (string, error)
+	activate     func(*stagedBinaries, installationActions) error
 	authorize    func(io.Writer, io.Writer)
 	advisory     func(io.Writer)
 }
@@ -108,7 +108,7 @@ func runInstallCommand(out io.Writer, deps installCommandDeps) error {
 	}
 	var authorization bytes.Buffer
 	actions.authorize = func() { deps.authorize(out, &authorization) }
-	if _, err := deps.activate(staged, actions); err != nil {
+	if err := deps.activate(staged, actions); err != nil {
 		return installationConfigError(commandPhaseError{message: "Couldn't finish installing Pipkin.", cause: err}, backup)
 	}
 	lines := lineOutput{w: out}
@@ -177,7 +177,7 @@ func runUpdateCommand(out io.Writer, deps updateCommandDeps) error {
 	var authorization bytes.Buffer
 	actions := deps.actions
 	actions.authorize = func() { deps.authorize(out, &authorization) }
-	if _, err := deps.activate(staged, actions); err != nil {
+	if err := deps.activate(staged, actions); err != nil {
 		return commandPhaseError{message: "Couldn't finish updating Pipkin.", cause: err}
 	}
 	lines := lineOutput{w: out}

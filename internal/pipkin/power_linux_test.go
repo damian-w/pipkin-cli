@@ -174,16 +174,18 @@ func logindTestWatch(t *testing.T, bus *logindTestBus) (chan powerEvent, context
 
 func logindTestEvent(t *testing.T, events <-chan powerEvent, kind powerEventKind, active bool) powerEvent {
 	t.Helper()
-	select {
-	case event := <-events:
-		if event.kind != kind || event.active != active {
-			t.Fatalf("power event=%+v, want kind=%d active=%t", event, kind, active)
-		}
-		return event
-	case <-time.After(2 * time.Second):
-		t.Fatal("missing power event")
-		return powerEvent{}
+	event := nextPowerEvent(t, events)
+	if event.kind != kind || event.active != active {
+		t.Fatalf("power event=%+v, want kind=%d active=%t", event, kind, active)
 	}
+	return event
+}
+
+// logindTestAwake reads the snapshot of a host neither sleeping nor shutting down.
+func logindTestAwake(t *testing.T, events <-chan powerEvent) {
+	t.Helper()
+	logindTestEvent(t, events, powerSystemSleep, false)
+	logindTestEvent(t, events, powerShutdown, false)
 }
 
 func logindTestFD(t *testing.T, bus *logindTestBus) int {
@@ -213,49 +215,42 @@ func logindTestSignal(member string, active bool) *dbus.Signal {
 	return &dbus.Signal{Path: logindPath, Name: logindInterface + "." + member, Body: []any{active}, Sequence: 30}
 }
 
-func TestLogindReportsSleepBeforeReleasingDelayAndReacquiresOnResume(t *testing.T) {
-	isolate(t)
-	bus := newLogindTestBus(t)
-	events, cancel, finished := logindTestWatch(t, bus)
-	fd := logindTestFD(t, bus)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
-	bus.emit(logindTestSignal("PrepareForSleep", true))
-	event := logindTestEvent(t, events, powerSystemSleep, true)
-	if event.done == nil {
-		t.Fatal("pre-sleep report did not request a helper acknowledgment")
+func TestLogindReportsSleepOrShutdownBeforeReleasingDelayAndReacquiresAfter(t *testing.T) {
+	for _, test := range []struct {
+		member string
+		kind   powerEventKind
+	}{
+		{"PrepareForSleep", powerSystemSleep},
+		{"PrepareForShutdown", powerShutdown},
+	} {
+		t.Run(test.member, func(t *testing.T) {
+			isolate(t)
+			bus := newLogindTestBus(t)
+			events, cancel, finished := logindTestWatch(t, bus)
+			fd := logindTestFD(t, bus)
+			logindTestAwake(t, events)
+			bus.emit(logindTestSignal(test.member, true))
+			event := logindTestEvent(t, events, test.kind, true)
+			if event.done == nil {
+				t.Fatal("pre-suspend report did not request a helper acknowledgment")
+			}
+			if flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil || flags&unix.FD_CLOEXEC == 0 {
+				t.Fatal("delay inhibitor released before the report completed")
+			}
+			close(event.done)
+			logindTestClosedFD(t, fd)
+			bus.emit(logindTestSignal(test.member, false))
+			logindTestEvent(t, events, test.kind, false)
+			fd = logindTestFD(t, bus)
+			cancel()
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Fatal("watcher cancellation stalled")
+			}
+			logindTestClosedFD(t, fd)
+		})
 	}
-	if flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil || flags&unix.FD_CLOEXEC == 0 {
-		t.Fatal("delay inhibitor released before the sleep report completed")
-	}
-	close(event.done)
-	logindTestClosedFD(t, fd)
-	bus.emit(logindTestSignal("PrepareForSleep", false))
-	logindTestEvent(t, events, powerSystemSleep, false)
-	fd = logindTestFD(t, bus)
-	cancel()
-	select {
-	case <-finished:
-	case <-time.After(time.Second):
-		t.Fatal("watcher cancellation stalled")
-	}
-	logindTestClosedFD(t, fd)
-}
-
-func TestLogindShutdownCancellationReacquiresDelay(t *testing.T) {
-	isolate(t)
-	bus := newLogindTestBus(t)
-	events, _, _ := logindTestWatch(t, bus)
-	fd := logindTestFD(t, bus)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
-	bus.emit(logindTestSignal("PrepareForShutdown", true))
-	event := logindTestEvent(t, events, powerShutdown, true)
-	close(event.done)
-	logindTestClosedFD(t, fd)
-	bus.emit(logindTestSignal("PrepareForShutdown", false))
-	logindTestEvent(t, events, powerShutdown, false)
-	logindTestFD(t, bus)
 }
 
 func TestLogindSnapshotSupersedesQueuedEarlierSleepSignals(t *testing.T) {
@@ -267,8 +262,7 @@ func TestLogindSnapshotSupersedesQueuedEarlierSleepSignals(t *testing.T) {
 		bus.emit(signal)
 	}
 	events, _, _ := logindTestWatch(t, bus)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
+	logindTestAwake(t, events)
 	bus.emit(logindTestSignal("PrepareForShutdown", true))
 	event := logindTestEvent(t, events, powerShutdown, true)
 	close(event.done)
@@ -294,8 +288,7 @@ func TestLogindMissingAcknowledgmentCannotPreventSleep(t *testing.T) {
 	bus := newLogindTestBus(t)
 	events, _, _ := logindTestWatch(t, bus)
 	fd := logindTestFD(t, bus)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
+	logindTestAwake(t, events)
 	bus.emit(logindTestSignal("PrepareForSleep", true))
 	logindTestEvent(t, events, powerSystemSleep, true)
 	logindTestClosedFD(t, fd)
@@ -306,8 +299,7 @@ func TestLogindDeniedDelayStillObservesSleepAndResume(t *testing.T) {
 	bus := newLogindTestBus(t)
 	bus.inhibitErr = dbus.Error{Name: "org.freedesktop.DBus.Error.AccessDenied"}
 	events, _, _ := logindTestWatch(t, bus)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
+	logindTestAwake(t, events)
 	bus.emit(logindTestSignal("PrepareForSleep", true))
 	close(logindTestEvent(t, events, powerSystemSleep, true).done)
 	bus.emit(logindTestSignal("PrepareForSleep", false))
@@ -319,8 +311,7 @@ func TestLogindCancellationDuringReportReleasesDelay(t *testing.T) {
 	bus := newLogindTestBus(t)
 	events, cancel, finished := logindTestWatch(t, bus)
 	fd := logindTestFD(t, bus)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
+	logindTestAwake(t, events)
 	bus.emit(logindTestSignal("PrepareForSleep", true))
 	logindTestEvent(t, events, powerSystemSleep, true)
 	cancel()
@@ -366,8 +357,7 @@ func TestLogindRestartsAndBusDisconnectsReconnectAndReseedState(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("lost power bus not closed")
 			}
-			logindTestEvent(t, events, powerSystemSleep, false)
-			logindTestEvent(t, events, powerShutdown, false)
+			logindTestAwake(t, events)
 			logindTestFD(t, second)
 			first.mu.Lock()
 			writer := first.writers[0]
@@ -408,8 +398,7 @@ func TestLogindRetriesMissingBusAndStopInterruptsRetry(t *testing.T) {
 		}
 		return bus, nil
 	}, time.Millisecond)
-	logindTestEvent(t, events, powerSystemSleep, false)
-	logindTestEvent(t, events, powerShutdown, false)
+	logindTestAwake(t, events)
 	fd := logindTestFD(t, bus)
 	stop()
 	logindTestClosedFD(t, fd)

@@ -2,7 +2,6 @@ package pipkin
 
 import (
 	"context"
-	"runtime"
 	"time"
 )
 
@@ -55,33 +54,12 @@ func (p *hostPower) apply(event powerEvent) {
 	}
 }
 
-// startPowerThread runs a native observer on one locked OS thread. run must send
-// exactly one startup result to ready, then observe until ctx is cancelled.
-func startPowerThread(ctx context.Context, run func(context.Context, chan<- error)) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	ready, done := make(chan error, 1), make(chan struct{})
-	go func() {
-		defer close(done)
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		run(ctx, ready)
-	}()
-	if err := <-ready; err != nil {
-		cancel()
-		<-done
-		return nil, err
-	}
-	return func() { cancel(); <-done }, nil
-}
-
 // A native pre-sleep callback must never hold the host up indefinitely. Even if
 // delivery cannot finish, the firmware's heartbeat timeout turns its screen off.
-func postPowerEvent(ctx context.Context, events chan<- powerEvent, kind powerEventKind, active, wait bool) bool {
+// Only an entering system sleep or shutdown waits for the helper's acknowledgment.
+func postPowerEvent(ctx context.Context, events chan<- powerEvent, kind powerEventKind, active bool) bool {
 	event := powerEvent{kind: kind, active: active}
-	if wait {
+	if active && kind != powerDisplaySleep {
 		event.done = make(chan struct{})
 	}
 	timer := time.NewTimer(time.Second)

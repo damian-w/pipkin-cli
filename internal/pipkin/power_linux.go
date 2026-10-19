@@ -122,8 +122,8 @@ func watchLogindPower(ctx context.Context, events chan<- powerEvent, conn powerB
 	// The snapshot follows subscription. Older queued signals are already
 	// represented by its state; replaying them could reverse a newer resume.
 	snapshotSequence := call.ResponseSequence
-	postPowerEvent(ctx, events, powerSystemSleep, sleeping, sleeping)
-	postPowerEvent(ctx, events, powerShutdown, shuttingDown, shuttingDown)
+	postPowerEvent(ctx, events, powerSystemSleep, sleeping)
+	postPowerEvent(ctx, events, powerShutdown, shuttingDown)
 	if sleeping || shuttingDown {
 		release()
 	}
@@ -159,7 +159,7 @@ func watchLogindPower(ctx context.Context, events chan<- powerEvent, conn powerB
 			default:
 				continue
 			}
-			postPowerEvent(ctx, events, kind, active, active)
+			postPowerEvent(ctx, events, kind, active)
 			if active {
 				// A delay inhibitor only gives the helper a bounded opportunity to
 				// write asleep. Always release it, including a missing helper ack.
