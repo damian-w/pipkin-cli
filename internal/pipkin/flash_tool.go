@@ -36,6 +36,10 @@ const (
 
 var errFlashProcessCleanup = errors.New("could not stop all flashing-tool processes")
 
+// errFlashBootMode means esptool reset the board but it started its firmware
+// instead of the ROM bootloader.
+var errFlashBootMode = errors.New("your display didn't enter its bootloader")
+
 type flashToolAsset struct{ Platform, Archive, SHA256 string }
 
 func (a flashToolAsset) binary() string {
@@ -412,6 +416,9 @@ func (t *flashTool) run(parent context.Context, timeout time.Duration, args ...s
 		if len(detail) > 1800 {
 			detail = detail[len(detail)-1800:]
 		}
+		if bytes.Contains(data, []byte("Wrong boot mode detected")) {
+			return data, fmt.Errorf("esptool failed: %w: %w\n%s", errFlashBootMode, err, detail)
+		}
 		return data, fmt.Errorf("esptool failed: %w\n%s", err, detail)
 	}
 	return data, nil
@@ -421,7 +428,7 @@ func toolPortArgs(port, before, after string, rom bool) ([]string, error) {
 	if port == "" || strings.HasPrefix(port, "-") || strings.ContainsAny(port, "\r\n\x00") || strings.Contains(port, "://") {
 		return nil, errors.New("invalid local serial port")
 	}
-	args := []string{"--port", port, "--baud", "115200", "--before", before, "--after", after, "--connect-attempts", "2", "--verbose"}
+	args := []string{"--port", port, "--baud", "115200", "--before", before, "--after", after, "--connect-attempts", flashConnectAttempts, "--verbose"}
 	if rom {
 		args = append(args, "--no-stub")
 	}
@@ -558,21 +565,6 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 	}
 	fmt.Fprintln(t.output, "Verifying firmware...")
 	_, err = t.run(ctx, 2*time.Minute, slices.Concat(args, []string{"verify-flash"}, options, pairs)...)
-	return err
-}
-
-func (t *flashTool) Reset(ctx context.Context, port string) error {
-	// Each POSIX esptool process opens with pyserial's DTR/RTS defaults. The
-	// no-reset path leaves DTR asserted, and hard-reset only pulses RTS: GPIO0
-	// then remains low when EN rises, selecting download mode again. Complete
-	// the standard bootloader-entry sequence first; it explicitly releases DTR
-	// before the final hard reset starts the application.
-	args, err := toolPortArgs(port, "default-reset", "hard-reset", true)
-	if err != nil {
-		return err
-	}
-	args = append(args, "--chip", "esp32", "read-mac")
-	_, err = t.run(ctx, 20*time.Second, args...)
 	return err
 }
 

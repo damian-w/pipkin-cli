@@ -26,6 +26,10 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	if os.Getenv("PIPKIN_TOOL_TEST_BOOT_MODE") != "" && strings.Contains(strings.Join(args, "|"), "--before|default-reset") {
+		fmt.Println("Connecting.............\n\nA fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.")
+		os.Exit(2)
+	}
 	for i, arg := range args {
 		switch arg {
 		case "version":

@@ -102,8 +102,11 @@ before exiting. Unplugging, closing the terminal or losing power can still
 interrupt it.
 
 After an interrupted flash, reconnect the board and run the command Pipkin
-printed, or rerun `pipkin flash` and add `--reinstall` if needed. If automatic
-bootloader entry fails, follow the command's bootloader guidance, then try again.
+printed, or rerun `pipkin flash` and add `--reinstall` if needed. If the display
+doesn't enter its bootloader on its own, hold the BOOT button on the back of the
+display, run `pipkin flash` again and keep holding BOOT until "Writing firmware..."
+appears. This is more likely on Windows, where the flashing tool can switch only
+one USB control line at a time.
 
 A verification error means the CLI could not confirm the expected running firmware.
 Do not treat it as a completed update. Check the cable and port, try again, and run

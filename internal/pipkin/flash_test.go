@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -235,6 +236,27 @@ func TestFlashRejectsIncompatibleAndChangedDevices(t *testing.T) {
 			}
 			if len(f.tool.writes) != 0 || f.tool.erases != 0 || f.starts != 1 {
 				t.Fatal("device rejection modified flash or failed to restore helper")
+			}
+		})
+	}
+}
+
+func TestFlashBootModeFailureExplainsBootButton(t *testing.T) {
+	for _, failing := range []int{1, 2} {
+		t.Run(map[int]string{1: "first-probe", 2: "confirmation-probe"}[failing], func(t *testing.T) {
+			f := newFlashFixture(t)
+			f.tool.onProbe = func(_ context.Context, probe int) {
+				if probe == failing {
+					f.tool.probeErr = fmt.Errorf("esptool failed: %w: exit status 2", errFlashBootMode)
+				}
+			}
+			err := f.run(context.Background(), flashOptions{}, "yes\n")
+			if !errors.Is(err, errFlashBootMode) || !strings.Contains(err.Error(), "Hold the BOOT button") || strings.Contains(err.Error(), "exit status") {
+				t.Fatalf("boot-mode failure lacked BOOT guidance: %v", err)
+			}
+			// esptool's failed reset already started the firmware.
+			if f.tool.resets != 0 || f.tool.erases != 0 || len(f.tool.writes) != 0 || f.starts != 1 {
+				t.Fatal("boot-mode failure wrote, restarted the board again or left the helper stopped")
 			}
 		})
 	}

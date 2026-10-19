@@ -17,6 +17,12 @@ runs. Canceling terminates that job; closing the job provides a second cleanup
 path for the helper and its children. If Windows cannot establish that process
 containment, Pipkin stops before the helper can access the board.
 
+On Windows, esptool can switch the board's DTR and RTS lines only one at a time,
+so entering the bootloader can fail on boards whose reset line rises quickly.
+Pipkin allows esptool its default of seven connection attempts there, and restarts
+the board after flashing by pulsing its reset line directly instead of entering
+the bootloader again.
+
 The cache retains the upstream `LICENSE` and `README.md` next to esptool.
 esptool is [GPL-2.0-or-later](https://github.com/espressif/esptool/blob/v5.4.0/LICENSE),
 and its matching [source and build instructions](https://github.com/espressif/esptool/tree/v5.4.0)

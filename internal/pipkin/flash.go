@@ -166,6 +166,16 @@ func (s *boardSession) claimPort(ctx context.Context) (map[string]string, error)
 	return identity, nil
 }
 
+// bootModeFailure explains how to hold the board in its bootloader by hand.
+func (s *boardSession) bootModeFailure() error {
+	s.reset = nil // esptool's last reset already started the board's firmware.
+	var help bytes.Buffer
+	lines := lineOutput{w: &help}
+	lines.line("", "Hold the BOOT button on the back of the display and run the same command again.")
+	lines.line("", `Keep holding BOOT until "Writing firmware..." appears.`)
+	return fmt.Errorf("%w, so no firmware was written.\n%s", errFlashBootMode, strings.TrimSuffix(help.String(), "\n"))
+}
+
 func (s *boardSession) close(result *error) {
 	if s.reset != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -332,6 +342,9 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	}
 	session.reset = tool.Reset // ROM probing can reset even when it fails midway.
 	probe, err := tool.Probe(ctx, port)
+	if errors.Is(err, errFlashBootMode) {
+		return session.bootModeFailure()
+	}
 	if err != nil {
 		return fmt.Errorf("could not check the ESP32 bootloader (close other serial tools, or hold BOOT while connecting): %w", err)
 	}
@@ -397,6 +410,9 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	// A user can unplug or exchange boards while deciding. Recheck the physical
 	// device before the first write, rather than trusting its serial-port pathname.
 	confirmedProbe, err := tool.Probe(ctx, port)
+	if errors.Is(err, errFlashBootMode) {
+		return session.bootModeFailure()
+	}
 	if err != nil {
 		return err
 	}

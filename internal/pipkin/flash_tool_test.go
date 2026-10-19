@@ -296,6 +296,11 @@ func TestFlashToolSubprocessBackend(t *testing.T) {
 		t.Fatalf("secure probe = %+v, %v", probe, err)
 	}
 	t.Setenv("PIPKIN_TOOL_TEST_SECURE", "")
+	t.Setenv("PIPKIN_TOOL_TEST_BOOT_MODE", "yes")
+	if _, err := tool.Probe(context.Background(), "COM7"); !errors.Is(err, errFlashBootMode) {
+		t.Fatalf("did not recognise a board that started its firmware: %v", err)
+	}
+	t.Setenv("PIPKIN_TOOL_TEST_BOOT_MODE", "")
 	data, err := tool.Read(context.Background(), "COM7", 0x8000, 0x1000)
 	if err != nil || len(data) != 0x1000 {
 		t.Fatalf("read = %d, %v", len(data), err)
@@ -314,15 +319,18 @@ func TestFlashToolSubprocessBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PIPKIN_TOOL_TEST_FAIL", "verify-flash")
-	if err := tool.Write(context.Background(), "COM7", images); err == nil {
-		t.Fatal("reported success when verification failed")
+	if err := tool.Write(context.Background(), "COM7", images); err == nil || errors.Is(err, errFlashBootMode) {
+		t.Fatalf("misreported failed verification: %v", err)
 	}
 	t.Setenv("PIPKIN_TOOL_TEST_FAIL", "")
 	if err := tool.EraseSettings(context.Background(), "COM7"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tool.Reset(context.Background(), "COM7"); err != nil {
-		t.Fatal(err)
+	// Windows restarts the board through the serial port rather than esptool.
+	if runtime.GOOS != "windows" {
+		if err := tool.Reset(context.Background(), "COM7"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	calls, err := os.ReadFile(log)
 	if err != nil {
@@ -332,14 +340,14 @@ func TestFlashToolSubprocessBackend(t *testing.T) {
 		if strings.Contains(line, "--force") || strings.Contains(line, "erase-flash") || strings.Contains(line, "--erase-all") {
 			t.Fatalf("unsafe flash args: %s", line)
 		}
-		if !strings.Contains(line, "--after|no-reset") && !strings.Contains(line, "--after|hard-reset|--connect-attempts|2|--verbose|--no-stub|--chip|esp32|read-mac") {
+		if !strings.Contains(line, "--after|no-reset") && !strings.Contains(line, "--after|hard-reset|--connect-attempts|"+flashConnectAttempts+"|--verbose|--no-stub|--chip|esp32|read-mac") {
 			t.Fatalf("reset changed bootloader unexpectedly: %s", line)
 		}
 	}
 	if !strings.Contains(string(calls), "erase-region|0x9000|0x6000") {
 		t.Fatal("settings erase lost its bounded region")
 	}
-	if !strings.Contains(string(calls), "--before|default-reset|--after|hard-reset") {
+	if runtime.GOOS != "windows" && !strings.Contains(string(calls), "--before|default-reset|--after|hard-reset") {
 		t.Fatal("post-flash reset must release DTR through the standard reset sequence before booting the application")
 	}
 	t.Setenv("ESPTOOL_CHIP", "esp8266")
