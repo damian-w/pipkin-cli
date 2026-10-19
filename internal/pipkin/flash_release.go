@@ -23,6 +23,14 @@ const firmwareRepository = "damian-w/pipkin"
 // board settings in NVS, between the partition table and the application.
 const firmwareBoard = "esp32-2432s028r"
 
+// Each release also carries a demo reel build of its application, versioned
+// <version>-demo, which only 'pipkin flash --demo' installs. firmware.json does
+// not list it, so it never changes what a normal flash writes.
+const (
+	demoFirmwareFile   = "pipkin-demo.bin"
+	demoFirmwareSuffix = "-demo"
+)
+
 const (
 	bootloaderOffset     = 0x1000
 	bootloaderMaxSize    = 0x7000
@@ -175,7 +183,7 @@ func (s firmwareSource) release(ctx context.Context, endpoint string) (firmwareR
 	return release, nil
 }
 
-func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent string) (_ *firmwareRelease, err error) {
+func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent string, demo bool) (_ *firmwareRelease, err error) {
 	endpoint := s.api + "/releases/latest"
 	if selectedVersion != "" {
 		if !stableFirmwareVersion.MatchString(selectedVersion) {
@@ -200,6 +208,9 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent strin
 		if asset.URL == base+asset.Name && filepath.Base(asset.Name) == asset.Name && !strings.ContainsAny(asset.Name, `\?#`) {
 			assets[asset.Name] = asset.URL
 		}
+	}
+	if _, ok := assets[demoFirmwareFile]; demo && !ok {
+		return nil, fmt.Errorf("firmware release %s has no demo reel", release.Tag)
 	}
 	fetch := func(name string, limit int64) ([]byte, error) {
 		url, ok := assets[name]
@@ -263,6 +274,26 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent strin
 			return nil, fmt.Errorf("%s is incompatible: %w", image.File, err)
 		}
 		if err := os.WriteFile(filepath.Join(folder, image.File), data, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	if demo {
+		// The demo reel takes the application's place, so it passes the same checks.
+		data, err := fetch(demoFirmwareFile, applicationMaxSize)
+		if err != nil {
+			return nil, err
+		}
+		image := firmwareImage{Role: "application", File: demoFirmwareFile, Offset: applicationOffset,
+			Size: int64(len(data)), SHA256: sums[demoFirmwareFile]}
+		if sha256Hex(data) != image.SHA256 {
+			return nil, fmt.Errorf("%s failed its release checksum", demoFirmwareFile)
+		}
+		reel := manifest
+		reel.Version += demoFirmwareSuffix
+		if err := validateFirmwareImage(image, data, reel); err != nil {
+			return nil, fmt.Errorf("%s is incompatible: %w", demoFirmwareFile, err)
+		}
+		if err := os.WriteFile(filepath.Join(folder, demoFirmwareFile), data, 0o600); err != nil {
 			return nil, err
 		}
 	}

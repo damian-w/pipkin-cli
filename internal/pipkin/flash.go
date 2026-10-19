@@ -22,8 +22,8 @@ import (
 )
 
 type flashOptions struct {
-	Port, Version string
-	Reinstall     bool
+	Port, Version   string
+	Reinstall, Demo bool
 }
 
 // parseOptions parses flag-only arguments. The named string options need a value.
@@ -69,6 +69,9 @@ func parseFlashOptions(args []string) (flashOptions, error) {
 		flags.StringVar(&options.Port, "port", "", "serial port")
 		flags.StringVar(&options.Version, "version", "", "stable firmware version")
 		flags.BoolVar(&options.Reinstall, "reinstall", false, "reinstall the same firmware version")
+		// Deliberately left out of the help: installs the release's demo reel build, which
+		// loops the product tour for photos and video. 'pipkin flash' puts Pipkin back.
+		flags.BoolVar(&options.Demo, "demo", false, "install the demo reel")
 	}, "port", "version"); err != nil {
 		return options, err
 	}
@@ -94,15 +97,15 @@ type firmwareFlasher interface {
 
 type flashActions struct {
 	boardActions
-	load    func(context.Context, string) (*firmwareRelease, error)
+	load    func(ctx context.Context, version string, demo bool) (*firmwareRelease, error)
 	prepare func(context.Context, io.Writer) (firmwareFlasher, error)
 }
 
 func defaultFlashActions() flashActions {
 	return flashActions{
 		boardActions: defaultBoardActions(),
-		load: func(ctx context.Context, selected string) (*firmwareRelease, error) {
-			return publicFirmwareSource().stage(ctx, selected, filepath.Join(appDir(), "cache", "firmware"))
+		load: func(ctx context.Context, selected string, demo bool) (*firmwareRelease, error) {
+			return publicFirmwareSource().stage(ctx, selected, filepath.Join(appDir(), "cache", "firmware"), demo)
 		},
 		prepare: func(ctx context.Context, output io.Writer) (firmwareFlasher, error) {
 			return prepareFlashTool(ctx, output)
@@ -306,7 +309,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := writeOutputLine(output, "", "Checking the firmware release..."); err != nil {
 		return err
 	}
-	release, err := actions.load(ctx, options.Version)
+	release, err := actions.load(ctx, options.Version, options.Demo)
 	if err != nil {
 		return fmt.Errorf("firmware release check failed: %w", err)
 	}
@@ -315,6 +318,10 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	// Reject invalid injected or stale metadata before preparing the flasher too.
 	if err := validateFirmwareManifest(release.Manifest, release.Tag); err != nil {
 		return err
+	}
+	target, application := release.Manifest.Version, ""
+	if options.Demo {
+		target, application = release.Manifest.Version+demoFirmwareSuffix, demoFirmwareFile
 	}
 	tool, err := actions.prepare(ctx, output)
 	if err != nil {
@@ -330,8 +337,8 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	installed := ""
 	if identity != nil {
 		installed = strings.TrimPrefix(identity["firmware"], "v")
-		if installed == release.Manifest.Version && !options.Reinstall {
-			return writeOutputLine(output, "", "Pipkin firmware "+release.Manifest.Version+" is up to date. Use --reinstall to flash it again.")
+		if installed == target && !options.Reinstall {
+			return writeOutputLine(output, "", "Pipkin firmware "+target+" is up to date. Use --reinstall to flash it again.")
 		}
 		if newerVersion(identity["firmware"], release.Manifest.Version) && options.Version == "" {
 			return fmt.Errorf("your display has newer firmware than the latest release; to downgrade, run 'pipkin flash --version %s'", release.Manifest.Version)
@@ -375,7 +382,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		if updating {
 			stored = true
 			installed = strings.TrimPrefix(storedVersion, "v")
-			if installed == release.Manifest.Version && !options.Reinstall {
+			if installed == target && !options.Reinstall {
 				return fmt.Errorf("Pipkin firmware %s is installed but not responding; run 'pipkin flash --reinstall' to repair it", storedVersion)
 			}
 			if newerVersion(storedVersion, release.Manifest.Version) && options.Version == "" {
@@ -389,13 +396,13 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	action := "Install"
 	if updating {
 		action = "Update"
-		if options.Reinstall && installed == release.Manifest.Version {
+		if options.Reinstall && installed == target {
 			action = "Reinstall"
 		} else if newerVersion(installed, release.Manifest.Version) {
 			action = "Downgrade"
 		}
 	}
-	prompt, err := writeFlashPlan(output, flashPlan{action: action, installed: installed, selected: release.Manifest.Version,
+	prompt, err := writeFlashPlan(output, flashPlan{action: action, installed: installed, selected: target,
 		port: port, stored: stored})
 	if err != nil {
 		return err
@@ -425,7 +432,11 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	var images []flashWriteImage
 	for _, image := range release.Manifest.Images {
 		if !updating || image.Role == "application" {
-			images = append(images, flashWriteImage{Path: filepath.Join(release.Folder, image.File), Offset: image.Offset})
+			file := image.File
+			if image.Role == "application" && application != "" {
+				file = application
+			}
+			images = append(images, flashWriteImage{Path: filepath.Join(release.Folder, file), Offset: image.Offset})
 		}
 	}
 	sort.Slice(images, func(i, j int) bool { return images[i].Offset < images[j].Offset })
@@ -457,12 +468,15 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return fmt.Errorf("firmware written, but startup could not be checked: %w", err)
 	}
-	if booted == nil || validateFlashIdentity(booted, release.Manifest) != nil || strings.TrimPrefix(booted["firmware"], "v") != release.Manifest.Version {
+	if booted == nil || validateFlashIdentity(booted, release.Manifest) != nil || strings.TrimPrefix(booted["firmware"], "v") != target {
 		return errors.New("firmware written and verified, but the expected Pipkin version did not respond after restart")
 	}
 	firmwareRunning = true
 	finishNotice()
-	return writeOutputLine(output, "", "Pipkin firmware "+release.Manifest.Version+" is running.")
+	if err := writeOutputLine(output, "", "Pipkin firmware "+target+" is running."); err != nil || !options.Demo {
+		return err
+	}
+	return writeOutputLine(output, "", "Run 'pipkin flash' to put the normal firmware back.")
 }
 
 // flashCancellationRemainder drops the cancellation but keeps other failures.

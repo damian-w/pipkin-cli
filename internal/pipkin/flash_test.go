@@ -108,7 +108,7 @@ type flashFixture struct {
 	release             *firmwareRelease
 	tool                *fakeFirmwareFlasher
 	initial, final      map[string]string
-	running             bool
+	running, demo       bool
 	stops, starts       int
 	identities          int
 	loadErr, prepareErr error
@@ -128,7 +128,10 @@ func newFlashFixture(t *testing.T) *flashFixture {
 	}
 	f.tool = &fakeFirmwareFlasher{probe: flashProbe{Chip: "esp32", FlashBytes: 4 << 20, MAC: "aa:bb:cc:dd:ee:ff"}, table: data}
 	f.actions = flashActions{
-		load:    func(context.Context, string) (*firmwareRelease, error) { return f.release, f.loadErr },
+		load: func(_ context.Context, _ string, demo bool) (*firmwareRelease, error) {
+			f.demo = demo
+			return f.release, f.loadErr
+		},
 		prepare: func(context.Context, io.Writer) (firmwareFlasher, error) { return f.tool, f.prepareErr },
 	}
 	f.actions.boardActions = boardActions{
@@ -190,6 +193,51 @@ func TestFlashFirstInstallAndUpdate(t *testing.T) {
 				t.Fatal("an uncancelled flash printed a cancellation notice", f.output.String())
 			}
 		})
+	}
+}
+
+func TestFlashDemoReelReplacesTheApplicationUntilANormalFlash(t *testing.T) {
+	for _, update := range []bool{false, true} {
+		f := newFlashFixture(t)
+		f.final = testFlashIdentity("2.0.1-demo")
+		if update {
+			f.initial = testFlashIdentity("2.0.1")
+		}
+		if err := f.run(context.Background(), flashOptions{Demo: true}, "y\n"); err != nil {
+			t.Fatal(err)
+		}
+		if !f.demo || len(f.tool.writes) != 1 || (f.tool.erases == 1) == update {
+			t.Fatal("demo reel was not staged or written like the normal firmware", f.tool.writes)
+		}
+		images := f.tool.writes[0]
+		if image := images[len(images)-1]; image.Offset != 0x10000 || filepath.Base(image.Path) != demoFirmwareFile {
+			t.Fatal("demo reel did not replace the application", images)
+		}
+		for _, want := range []string{"2.0.1-demo.", "Pipkin firmware 2.0.1-demo is running.", "Run 'pipkin flash' to put the normal firmware back."} {
+			if !strings.Contains(f.output.String(), want) {
+				t.Fatal(f.output.String())
+			}
+		}
+	}
+
+	f := newFlashFixture(t)
+	f.initial = testFlashIdentity("2.0.1-demo")
+	if err := f.run(context.Background(), flashOptions{Demo: true}, "y\n"); err != nil || len(f.tool.writes) != 0 || !strings.Contains(f.output.String(), "2.0.1-demo is up to date") {
+		t.Fatal(err, f.output.String())
+	}
+	f = newFlashFixture(t)
+	f.initial = testFlashIdentity("2.0.1-demo")
+	if err := f.run(context.Background(), flashOptions{}, "y\n"); err != nil {
+		t.Fatal(err)
+	}
+	if f.demo || len(f.tool.writes) != 1 || filepath.Base(f.tool.writes[0][0].Path) != "pipkin.bin" ||
+		!strings.Contains(f.output.String(), "from Pipkin 2.0.1-demo to 2.0.1.") || strings.Contains(f.output.String(), "normal firmware back") {
+		t.Fatal("a normal flash did not put the normal firmware back", f.output.String())
+	}
+	f = newFlashFixture(t)
+	f.initial = testFlashIdentity("2.0.1")
+	if err := f.run(context.Background(), flashOptions{Demo: true}, "y\n"); err == nil {
+		t.Fatal("the normal firmware answering after a demo flash counted as success")
 	}
 }
 
@@ -438,8 +486,8 @@ func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
 			t.Fatal("invalid flash options accepted", args)
 		}
 	}
-	options, err := parseFlashOptions([]string{"--port", "COM3", "--version", "v1.0.0", "--reinstall"})
-	if err != nil || options.Port != "COM3" || options.Version != "1.0.0" || !options.Reinstall {
+	options, err := parseFlashOptions([]string{"--port", "COM3", "--version", "v1.0.0", "--reinstall", "--demo"})
+	if err != nil || options.Port != "COM3" || options.Version != "1.0.0" || !options.Reinstall || !options.Demo {
 		t.Fatal(options, err)
 	}
 	for _, candidates := range [][]string{nil, {"one", "two"}} {
@@ -459,8 +507,8 @@ func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
 	for _, args := range [][]string{{"flash", "--help"}, {"help", "flash"}} {
 		calls := 0
 		var output bytes.Buffer
-		if code, err := dispatch(args, "2.0.0", recordingCommands(&output, &calls), &output); code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "--reinstall") {
-			t.Fatal("flash help has side effects", code, err)
+		if code, err := dispatch(args, "2.0.0", recordingCommands(&output, &calls), &output); code != 0 || err != nil || calls != 0 || !strings.Contains(output.String(), "--reinstall") || strings.Contains(output.String(), "--demo") {
+			t.Fatal("flash help has side effects or shows the hidden demo option", code, err)
 		}
 	}
 }

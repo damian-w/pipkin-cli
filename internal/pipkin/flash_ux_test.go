@@ -37,7 +37,7 @@ func TestFlashCancellationBeforeWriteNeverStartsEraseOrWrite(t *testing.T) {
 			case "initial":
 				cancel()
 			case "release":
-				f.actions.load = func(context.Context, string) (*firmwareRelease, error) { cancel(); return f.release, nil }
+				f.actions.load = func(context.Context, string, bool) (*firmwareRelease, error) { cancel(); return f.release, nil }
 			case "prepare":
 				f.actions.prepare = func(context.Context, io.Writer) (firmwareFlasher, error) { cancel(); return f.tool, nil }
 			case "identity":

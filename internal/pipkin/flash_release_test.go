@@ -86,7 +86,7 @@ func (f *firmwareHTTPFixture) alterManifest(change func(map[string]any)) {
 
 func TestFirmwareReleaseStagesOneFrozenStableVersion(t *testing.T) {
 	f := newFirmwareHTTPFixture(t)
-	r, err := f.source.stage(context.Background(), "", t.TempDir())
+	r, err := f.source.stage(context.Background(), "", t.TempDir(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
 				})
 			}
 			parent := t.TempDir()
-			if release, err := f.source.stage(context.Background(), "", parent); err == nil {
+			if release, err := f.source.stage(context.Background(), "", parent, false); err == nil {
 				release.close()
 				t.Fatal("unsafe firmware release was accepted")
 			}
@@ -185,9 +185,53 @@ func TestFirmwareReleaseRejectsIncompleteCorruptAndUnsafeAssets(t *testing.T) {
 	}
 }
 
+func TestFirmwareReleaseStagesACheckedDemoReel(t *testing.T) {
+	for _, scenario := range []string{"staged", "missing", "normal-version", "changed"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newFirmwareHTTPFixture(t)
+			if scenario != "missing" {
+				version := "2.0.0-demo"
+				if scenario == "normal-version" {
+					version = "2.0.0"
+				}
+				f.files[demoFirmwareFile] = buildTestESPImage(version, strings.Repeat("a", 40))
+				f.refreshChecksums()
+				if scenario == "changed" {
+					f.files[demoFirmwareFile][100] ^= 1
+				}
+				f.metadata["assets"] = append(f.metadata["assets"].([]map[string]string), map[string]string{
+					"name": demoFirmwareFile, "browser_download_url": f.server.URL + "/download/v2.0.0/" + demoFirmwareFile})
+			}
+			parent := t.TempDir()
+			release, err := f.source.stage(context.Background(), "", parent, true)
+			if scenario == "staged" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release.close()
+				got, err := os.ReadFile(filepath.Join(release.Folder, demoFirmwareFile))
+				if err != nil || string(got) != string(f.files[demoFirmwareFile]) || release.Manifest.Version != "2.0.0" {
+					t.Fatal("demo reel was not staged beside the release", err)
+				}
+				return
+			}
+			if err == nil {
+				release.close()
+				t.Fatal("unsafe demo reel was accepted")
+			}
+			if scenario == "missing" && !strings.Contains(err.Error(), "has no demo reel") {
+				t.Fatal(err)
+			}
+			if entries, _ := os.ReadDir(parent); len(entries) != 0 {
+				t.Fatal("failed demo reel left staged images behind")
+			}
+		})
+	}
+}
+
 func TestFirmwareReleaseExplicitStableVersionAndCancellation(t *testing.T) {
 	f := newFirmwareHTTPFixture(t)
-	r, err := f.source.stage(context.Background(), "v2.0.0", t.TempDir())
+	r, err := f.source.stage(context.Background(), "v2.0.0", t.TempDir(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +241,11 @@ func TestFirmwareReleaseExplicitStableVersionAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := f.source.stage(ctx, "", t.TempDir()); err == nil {
+	if _, err := f.source.stage(ctx, "", t.TempDir(), false); err == nil {
 		t.Fatal("cancelled firmware request succeeded")
 	}
 	for _, invalid := range []string{"../main", "main", "v1.0.0-beta", "v1.00.0"} {
-		if _, err := f.source.stage(context.Background(), invalid, t.TempDir()); err == nil {
+		if _, err := f.source.stage(context.Background(), invalid, t.TempDir(), false); err == nil {
 			t.Fatal("invalid release version accepted", invalid)
 		}
 	}
