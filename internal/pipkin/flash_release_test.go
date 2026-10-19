@@ -14,6 +14,8 @@ import (
 	"testing"
 )
 
+const demoFirmwareFile = "pipkin-demo.bin"
+
 type firmwareHTTPFixture struct {
 	server   *httptest.Server
 	source   firmwareSource

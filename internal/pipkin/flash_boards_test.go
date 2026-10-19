@@ -319,6 +319,22 @@ func TestFirmwareReleaseStagesEveryBoard(t *testing.T) {
 		}
 	}
 
+	// A release whose only demo reel is the 4-inch one still stages it.
+	reel := withChipID(buildTestESPImage("2.0.0-demo", large.SourceRevision), testLargeBoard.ChipID)
+	f.files[testLargeBoard.demoFile()] = reel
+	f.refreshChecksums()
+	f.metadata["assets"] = append(f.metadata["assets"].([]map[string]string), map[string]string{
+		"name": testLargeBoard.demoFile(), "browser_download_url": f.server.URL + "/download/v2.0.0/" + testLargeBoard.demoFile()})
+	demo, err := f.source.stage(context.Background(), "", t.TempDir(), true)
+	if err != nil {
+		t.Fatal("4-inch-only demo reel was refused:", err)
+	}
+	got, err := os.ReadFile(filepath.Join(demo.Folder, testLargeBoard.demoFile()))
+	demo.close()
+	if err != nil || string(got) != string(reel) {
+		t.Fatal("4-inch demo reel was not staged", err)
+	}
+
 	// A 4-inch manifest whose images are for the classic ESP32 is rejected.
 	f.files["pipkin-es3c40p.bin"] = withChipID(f.files["pipkin-es3c40p.bin"], 0)
 	digest := sha256.Sum256(f.files["pipkin-es3c40p.bin"])

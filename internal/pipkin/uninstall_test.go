@@ -172,8 +172,10 @@ func TestUninstallStagesOnlyVerifiedInstallationAndPreservesReplacement(t *testi
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json.backup-fixture"), []byte("original"), 0600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"config.json.backup-fixture", "boards.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("original"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	target, err := inspectRemovalTarget(dir, home, work)
 	if err != nil {

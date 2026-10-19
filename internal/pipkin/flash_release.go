@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -26,10 +27,7 @@ const firmwareBoard = "esp32-2432s028r"
 // Each release also carries a demo reel build of each board's application,
 // versioned <version>-demo, which only 'pipkin flash --demo' installs. The
 // manifests do not list it, so it never changes what a normal flash writes.
-const (
-	demoFirmwareFile   = "pipkin-demo.bin"
-	demoFirmwareSuffix = "-demo"
-)
+const demoFirmwareSuffix = "-demo"
 
 const (
 	partitionTableOffset = 0x8000
@@ -222,7 +220,8 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent strin
 			assets[asset.Name] = asset.URL
 		}
 	}
-	if _, ok := assets[demoFirmwareFile]; demo && !ok {
+	// Which board needs a reel isn't known yet; runFlash checks the chosen one.
+	if demo && !slices.ContainsFunc(displayBoards, func(board displayBoard) bool { _, ok := assets[board.demoFile()]; return ok }) {
 		return nil, fmt.Errorf("firmware release %s has no demo reel", release.Tag)
 	}
 	fetch := func(name string, limit int64) ([]byte, error) {

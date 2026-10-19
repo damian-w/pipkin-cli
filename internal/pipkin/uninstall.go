@@ -115,7 +115,8 @@ func validateRemovalContents(dir, shown string) error {
 				return nil
 			}
 			directory := name == "bin" || name == "cache" || name == "tools"
-			file := name == "config.json" || name == "config.lock" || name == "status.json" ||
+			// 1.x saved board associations in boards.json; 2.x keeps no such file.
+			file := name == "config.json" || name == "config.lock" || name == "status.json" || name == "boards.json" ||
 				name == "helper.lock" || name == "helper.pid" || name == "helper.log" || name == "helper.log.1" || name == ".DS_Store" ||
 				strings.HasPrefix(name, "config.json.backup-") || strings.HasPrefix(name, ".pipkin-")
 			if directory != info.IsDir() || !directory && !file {
