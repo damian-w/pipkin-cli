@@ -177,14 +177,9 @@ func TestClaudeTaskUnavailableAndBoundedReads(t *testing.T) {
 		t.Fatal("missing files became an empty task list")
 	}
 	writeClaudeTaskFixture(t, f.path, f.registry)
-	file, err := os.OpenFile(f.path, os.O_WRONLY, 0600)
-	if err != nil {
+	if err := os.Truncate(f.path, claudeTaskRegistryLimit+1); err != nil {
 		t.Fatal(err)
 	}
-	if err := file.Truncate(claudeTaskRegistryLimit + 1); err != nil {
-		t.Fatal(err)
-	}
-	file.Close()
 	if p := collectClaudeTasksWith(context.Background(), f.deps); p.Tasks != nil {
 		t.Fatal("oversized registry was accepted")
 	}
@@ -231,13 +226,7 @@ func TestClaudeTaskIdleRequiresMatchingMetadata(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "oversized":
-				file, err := os.OpenFile(f.metaPath, os.O_WRONLY, 0600)
-				if err != nil {
-					t.Fatal(err)
-				}
-				err = file.Truncate(claudeTaskMetadataLimit + 1)
-				file.Close()
-				if err != nil {
+				if err := os.Truncate(f.metaPath, claudeTaskMetadataLimit+1); err != nil {
 					t.Fatal(err)
 				}
 			case "wrong host":

@@ -246,34 +246,57 @@ func TestClaudeDesktopOrgCookieWins(t *testing.T) {
 	}
 }
 
+var claudeOrgStrictCookieCases = []struct {
+	name  string
+	write func(*testing.T, string)
+	want  error
+}{
+	{
+		name: "corrupt database",
+		write: func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("synthetic corrupt database"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		want: errClaudeOrgStorage,
+	},
+	{
+		name: "unsupported schema",
+		write: func(t *testing.T, path string) {
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec("CREATE TABLE cookies (name TEXT)"); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+		},
+		want: errClaudeOrgStorage,
+	},
+	{
+		name: "invalid organization",
+		write: func(t *testing.T, path string) {
+			writeClaudeOrgTestCookies(t, path, claudeOrgTestCookie{host: ".claude.ai", value: "synthetic-invalid-org", updated: 1})
+		},
+		want: errClaudeOrgInvalid,
+	},
+}
+
 func TestClaudeDesktopOrgStrictCookieFailures(t *testing.T) {
 	cache := map[string]json.RawMessage{claudeOrgTestKey(claudeOrgTestAccount, claudeOrgTestFirst, "user:profile"): claudeOrgTestEntry()}
-	t.Run("corrupt database", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "Cookies"), []byte("synthetic corrupt database"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if org, err := resolveClaudeDesktopOrg(context.Background(), dir, claudeOrgTestDecrypt, cache, nil, claudeOrgTestAccount, true); !errors.Is(err, errClaudeOrgStorage) || org != "" {
-			t.Fatalf("corrupt database allowed cache fallback: org=%q err=%v", org, err)
-		}
-	})
-	t.Run("unsupported cookie schema", func(t *testing.T) {
-		dir := t.TempDir()
-		db, err := sql.Open("sqlite", filepath.Join(dir, "Cookies"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec("CREATE TABLE cookies (name TEXT)"); err != nil {
-			db.Close()
-			t.Fatal(err)
-		}
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if org, err := resolveClaudeDesktopOrg(context.Background(), dir, claudeOrgTestDecrypt, cache, nil, claudeOrgTestAccount, true); !errors.Is(err, errClaudeOrgStorage) || org != "" {
-			t.Fatalf("unsupported schema allowed cache fallback: org=%q err=%v", org, err)
-		}
-	})
+	for _, c := range claudeOrgStrictCookieCases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			c.write(t, filepath.Join(dir, "Cookies"))
+			if org, err := resolveClaudeDesktopOrg(context.Background(), dir, claudeOrgTestDecrypt, cache, nil, claudeOrgTestAccount, true); !errors.Is(err, c.want) || org != "" {
+				t.Fatalf("%s allowed cache fallback: org=%q err=%v", c.name, org, err)
+			}
+		})
+	}
 	t.Run("decryption failure", func(t *testing.T) {
 		dir := t.TempDir()
 		writeClaudeOrgTestCookies(t, filepath.Join(dir, "Cookies"), claudeOrgTestCookie{host: ".claude.ai", encrypted: []byte("synthetic-only-ciphertext"), updated: 1})
@@ -281,13 +304,6 @@ func TestClaudeDesktopOrgStrictCookieFailures(t *testing.T) {
 		decrypt := func([]byte) ([]byte, error) { return nil, wantErr }
 		if org, err := resolveClaudeDesktopOrg(context.Background(), dir, decrypt, cache, nil, claudeOrgTestAccount, true); !errors.Is(err, wantErr) || org != "" {
 			t.Fatalf("decryption failure allowed cache fallback: org=%q err=%v", org, err)
-		}
-	})
-	t.Run("invalid organization value", func(t *testing.T) {
-		dir := t.TempDir()
-		writeClaudeOrgTestCookies(t, filepath.Join(dir, "Cookies"), claudeOrgTestCookie{host: ".claude.ai", value: "synthetic-invalid-org", updated: 1})
-		if org, err := resolveClaudeDesktopOrg(context.Background(), dir, claudeOrgTestDecrypt, cache, nil, claudeOrgTestAccount, true); !errors.Is(err, errClaudeOrgInvalid) || org != "" {
-			t.Fatalf("invalid cookie organization allowed cache fallback: org=%q err=%v", org, err)
 		}
 	})
 	t.Run("canceled context", func(t *testing.T) {

@@ -510,7 +510,7 @@ func selectClaudeDesktopToken(v2, v1 map[string]json.RawMessage, account, org st
 				}
 			}
 			if rank > bestRank || rank == bestRank && entry.ExpiresAt > best.ExpiresAt {
-				best = claudeCredential{AccessToken: entry.Token, ExpiresAt: entry.ExpiresAt, Plan: entry.Plan, Scopes: key.scopes}
+				best = claudeCredential{AccessToken: entry.Token, ExpiresAt: entry.ExpiresAt, Plan: entry.Plan}
 				bestRank = rank
 			}
 		}

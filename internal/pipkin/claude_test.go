@@ -6,7 +6,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -101,18 +100,8 @@ func TestClaudeSessionNotStarted(t *testing.T) {
 
 func TestClaudeActiveOrganizationCookie(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "Cookies"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err = db.Exec("CREATE TABLE cookies (host_key TEXT,name TEXT,value TEXT,encrypted_value BLOB,last_update_utc INTEGER)"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec("INSERT INTO cookies VALUES ('.claude.ai','lastActiveOrg','',?,1)", []byte("test ciphertext")); err != nil {
-		t.Fatal(err)
-	}
-	org := "22222222-2222-2222-2222-222222222222"
+	writeClaudeOrgTestCookies(t, filepath.Join(dir, "Cookies"), claudeOrgTestCookie{host: ".claude.ai", encrypted: []byte("test ciphertext"), updated: 1})
+	org := claudeOrgTestFirst
 	hash := sha256.Sum256([]byte(".claude.ai"))
 	decrypt := func([]byte) ([]byte, error) { return append(hash[:], []byte(org)...), nil }
 	if got, err := claudeActiveOrg(context.Background(), dir, decrypt); err != nil || got != org {
@@ -126,46 +115,31 @@ func TestClaudeActiveOrganizationCookie(t *testing.T) {
 }
 
 func TestClaudeDesktopSelection(t *testing.T) {
-	account := "11111111-1111-1111-1111-111111111111"
-	org := "22222222-2222-2222-2222-222222222222"
-	key := "9d1c250a-e61b-44d9-88ed-5944d1962f5e:" + org + ":https://api.anthropic.com:user:profile user:inference"
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-	entry := json.RawMessage(`{"token":"synthetic-token","expiresAt":4102444800000}`)
-	v1 := map[string]json.RawMessage{key: entry}
-	v2 := map[string]json.RawMessage{"acct:" + account + "|" + key: json.RawMessage(`null`)}
-	if _, err := selectClaudeDesktopToken(v2, v1, account, org, now); !errors.Is(err, errSignedOut) {
-		t.Fatal("V2 deletion resurrected V1 login")
-	}
-	v2["acct:"+account+"|"+key] = entry
-	if c, err := selectClaudeDesktopToken(v2, nil, account, org, now); err != nil || c.AccessToken == "" {
+	v2 := map[string]json.RawMessage{claudeOrgTestKey(claudeOrgTestAccount, claudeOrgTestFirst, "user:profile user:inference"): claudeOrgTestEntry()}
+	if c, err := selectClaudeDesktopToken(v2, nil, claudeOrgTestAccount, claudeOrgTestFirst, now); err != nil || c.AccessToken == "" {
 		t.Fatal("active scoped login missing")
 	}
-	if _, err := selectClaudeDesktopToken(v2, nil, "33333333-3333-3333-3333-333333333333", org, now); err == nil {
+	if _, err := selectClaudeDesktopToken(v2, nil, claudeOrgTestForeign, claudeOrgTestFirst, now); err == nil {
 		t.Fatal("foreign account selected")
-	}
-	v2["acct:"+account+"|"+key] = json.RawMessage(`{"token":"expired","expiresAt":1}`)
-	if _, err := selectClaudeDesktopToken(v2, v1, account, org, now); !errors.Is(err, errSignedOut) {
-		t.Fatal("expired V2 login fell back to old V1 alias")
 	}
 }
 
 func TestClaudeScopeSetPrecedence(t *testing.T) {
-	account := "11111111-1111-1111-1111-111111111111"
-	org := "22222222-2222-2222-2222-222222222222"
-	prefix := "9d1c250a-e61b-44d9-88ed-5944d1962f5e:" + org + ":https://api.anthropic.com:"
+	account, org := claudeOrgTestAccount, claudeOrgTestFirst
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-	v1 := map[string]json.RawMessage{prefix + "user:profile user:inference": json.RawMessage(`{"token":"synthetic-old","expiresAt":4102444800000}`)}
-	for _, scopes := range []string{"user:inference user:profile", "user:profile user:inference user:profile", "user:inference   user:profile"} {
+	v1 := map[string]json.RawMessage{claudeOrgTestKey("", org, "user:profile user:inference"): claudeOrgTestEntry()}
+	for _, scopes := range []string{"user:profile user:inference", "user:inference user:profile", "user:profile user:inference user:profile", "user:inference   user:profile"} {
 		for _, value := range []string{`null`, `{"token":"synthetic-expired","expiresAt":1}`} {
-			v2 := map[string]json.RawMessage{"acct:" + account + "|" + prefix + scopes: json.RawMessage(value)}
+			v2 := map[string]json.RawMessage{claudeOrgTestKey(account, org, scopes): json.RawMessage(value)}
 			if _, err := selectClaudeDesktopToken(v2, v1, account, org, now); !errors.Is(err, errSignedOut) {
 				t.Fatal("V2 scope set resurrected an equivalent older login")
 			}
 		}
 	}
 	cache := map[string]json.RawMessage{
-		prefix + "user:profile user:inference":                           json.RawMessage(`{"token":"synthetic-old","expiresAt":4102444800000}`),
-		"acct:" + account + "|" + prefix + "user:inference user:profile": json.RawMessage(`null`),
+		claudeOrgTestKey("", org, "user:profile user:inference"):      claudeOrgTestEntry(),
+		claudeOrgTestKey(account, org, "user:inference user:profile"): json.RawMessage(`null`),
 	}
 	if _, err := selectClaudeDesktopToken(cache, nil, account, org, now); !errors.Is(err, errSignedOut) {
 		t.Fatal("scoped tombstone did not override an unscoped alias")
@@ -218,8 +192,7 @@ func TestClaudeDesktopLive(t *testing.T) {
 }
 
 func TestClaudeHTTPTrustBoundary(t *testing.T) {
-	account := "11111111-1111-1111-1111-111111111111"
-	org := "22222222-2222-2222-2222-222222222222"
+	account, org := claudeOrgTestAccount, claudeOrgTestFirst
 	credential := claudeCredential{AccessToken: "test-only-token", source: "claude-desktop", identity: account + "|" + org}
 	calls := 0
 	stubUsageHTTP(t, func(req *http.Request) *http.Response {
@@ -237,7 +210,7 @@ func TestClaudeHTTPTrustBoundary(t *testing.T) {
 	stubUsageHTTP(t, func(req *http.Request) *http.Response {
 		body := `{"five_hour":{"utilization":10}}`
 		if strings.HasSuffix(req.URL.Path, "profile") {
-			body = `{"account":{"uuid":"33333333-3333-3333-3333-333333333333"},"organization":{"uuid":"` + org + `"}}`
+			body = `{"account":{"uuid":"` + claudeOrgTestForeign + `"},"organization":{"uuid":"` + org + `"}}`
 		}
 		return testResponse(req, http.StatusOK, body)
 	})
@@ -256,19 +229,25 @@ func TestClaudeHTTPTrustBoundary(t *testing.T) {
 	}
 }
 
-func TestClaudeDesktopSignedIn(t *testing.T) {
-	home := t.TempDir()
+func isolateClaudeDesktop(t *testing.T) (home, dir string) {
+	t.Helper()
+	home = t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	dir = claudeDesktopDirs()[0]
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return home, dir
+}
+
+func TestClaudeDesktopSignedIn(t *testing.T) {
+	_, dir := isolateClaudeDesktop(t)
 	if claudeDesktopSignedIn() {
 		t.Fatal("signed in without a Claude Desktop config")
-	}
-	dir := claudeDesktopDirs()[0]
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
 	}
 	config := filepath.Join(dir, "config.json")
 	for _, raw := range []string{`{"locale":"en-AU"}`, `{"oauth:tokenCacheV2":null}`, `{"oauth:tokenCache":null,"oauth:tokenCacheV2":null}`} {
@@ -291,17 +270,8 @@ func TestClaudeNullDesktopCacheAllowsCodeFallback(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("Code fallback would consult the native Keychain")
 	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
-	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	home, dir := isolateClaudeDesktop(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
-	dir := claudeDesktopDirs()[0]
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"lastKnownAccountUuid":"11111111-1111-1111-1111-111111111111","oauth:tokenCacheV2":null}`), 0600); err != nil {
 		t.Fatal(err)
 	}

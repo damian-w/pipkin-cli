@@ -1,5 +1,3 @@
-//go:build windows
-
 package pipkin
 
 import (
@@ -67,48 +65,48 @@ func writeClaudeIdentityTestConfig(t *testing.T, dir string, config claudeDeskto
 func TestClaudeDesktopWindowsIdentityRevalidation(t *testing.T) {
 	for _, c := range []struct {
 		name            string
-		mutate          func(*testing.T, string, claudeDesktopConfig)
+		mutate          func(*testing.T, string)
 		profileMismatch bool
 		wantErr         error
 	}{
 		{name: "unchanged identity succeeds"},
 		{
 			name: "same organization token rotation succeeds",
-			mutate: func(t *testing.T, dir string, _ claudeDesktopConfig) {
+			mutate: func(t *testing.T, dir string) {
 				writeClaudeIdentityTestConfig(t, dir, claudeIdentityTestConfig(t, claudeOrgTestAccount, "synthetic-only-rotated", claudeOrgTestFirst))
 			},
 		},
 		{
 			name: "account switch rejects captured usage",
-			mutate: func(t *testing.T, dir string, _ claudeDesktopConfig) {
+			mutate: func(t *testing.T, dir string) {
 				writeClaudeIdentityTestConfig(t, dir, claudeIdentityTestConfig(t, claudeOrgTestForeign, "synthetic-only-other-account", claudeOrgTestFirst))
 			},
 			wantErr: errSignedOut,
 		},
 		{
 			name: "newly ambiguous inventory rejects captured usage",
-			mutate: func(t *testing.T, dir string, _ claudeDesktopConfig) {
+			mutate: func(t *testing.T, dir string) {
 				writeClaudeIdentityTestConfig(t, dir, claudeIdentityTestConfig(t, claudeOrgTestAccount, "synthetic-only-token", claudeOrgTestFirst, claudeOrgTestSecond))
 			},
 			wantErr: errClaudeOrgAmbiguous,
 		},
 		{
 			name: "organization switch rejects captured usage",
-			mutate: func(t *testing.T, dir string, _ claudeDesktopConfig) {
+			mutate: func(t *testing.T, dir string) {
 				writeClaudeIdentityTestConfig(t, dir, claudeIdentityTestConfig(t, claudeOrgTestAccount, "synthetic-only-other-org", claudeOrgTestSecond))
 			},
 			wantErr: errSignedOut,
 		},
 		{
 			name: "sign out rejects captured usage",
-			mutate: func(t *testing.T, dir string, _ claudeDesktopConfig) {
+			mutate: func(t *testing.T, dir string) {
 				writeClaudeIdentityTestConfig(t, dir, claudeDesktopConfig{AccountUUID: claudeOrgTestAccount})
 			},
 			wantErr: errSignedOut,
 		},
 		{
 			name: "removed config rejects captured usage",
-			mutate: func(t *testing.T, dir string, _ claudeDesktopConfig) {
+			mutate: func(t *testing.T, dir string) {
 				if err := os.Remove(filepath.Join(dir, "config.json")); err != nil {
 					t.Fatal(err)
 				}
@@ -141,7 +139,7 @@ func TestClaudeDesktopWindowsIdentityRevalidation(t *testing.T) {
 				body := `{"five_hour":{"utilization":10},"seven_day":{"utilization":50}}`
 				if strings.HasSuffix(req.URL.Path, "/profile") {
 					if c.mutate != nil {
-						c.mutate(t, dir, config)
+						c.mutate(t, dir)
 					}
 					account := claudeOrgTestAccount
 					if c.profileMismatch {

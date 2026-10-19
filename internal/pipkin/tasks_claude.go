@@ -172,7 +172,6 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 			task.Status = "needs_attention"
 		case "idle":
 			// An idle engine may still be waiting for input, so idle needs metadata.
-			task.Status = "unknown"
 			matchedMetadata := false
 			metadataState := ""
 			metadataConflict := false

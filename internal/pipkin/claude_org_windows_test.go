@@ -1,10 +1,7 @@
-//go:build windows
-
 package pipkin
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,42 +113,7 @@ func TestClaudeDesktopOrgWindowsReadableCookieWinsOverLockedCandidate(t *testing
 func TestClaudeDesktopOrgWindowsStrictCandidateBlocksLockedFallback(t *testing.T) {
 	cache := map[string]json.RawMessage{claudeOrgTestKey(claudeOrgTestAccount, claudeOrgTestFirst, "user:profile"): claudeOrgTestEntry()}
 	for _, lockedRelative := range []string{"Cookies", filepath.Join("Network", "Cookies")} {
-		for _, c := range []struct {
-			name  string
-			write func(*testing.T, string)
-			want  error
-		}{
-			{
-				name: "corrupt database",
-				write: func(t *testing.T, path string) {
-					if err := os.WriteFile(path, []byte("synthetic corrupt database"), 0600); err != nil {
-						t.Fatal(err)
-					}
-				},
-				want: errClaudeOrgStorage,
-			},
-			{
-				name: "unsupported schema",
-				write: func(t *testing.T, path string) {
-					db, err := sql.Open("sqlite", path)
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer db.Close()
-					if _, err := db.Exec("CREATE TABLE cookies (name TEXT)"); err != nil {
-						t.Fatal(err)
-					}
-				},
-				want: errClaudeOrgStorage,
-			},
-			{
-				name: "invalid organization",
-				write: func(t *testing.T, path string) {
-					writeClaudeOrgTestCookies(t, path, claudeOrgTestCookie{host: ".claude.ai", value: "synthetic-invalid-org", updated: 1})
-				},
-				want: errClaudeOrgInvalid,
-			},
-		} {
+		for _, c := range claudeOrgStrictCookieCases {
 			t.Run(lockedRelative+"/"+c.name, func(t *testing.T) {
 				dir := t.TempDir()
 				locked := filepath.Join(dir, lockedRelative)

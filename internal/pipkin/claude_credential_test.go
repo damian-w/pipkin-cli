@@ -38,16 +38,7 @@ func TestClaudeCredentialPreference(t *testing.T) {
 		{name: "Linux keeps Desktop first", goos: "linux"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-			t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
-			t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
-			dir := claudeDesktopDirs()[0]
-			if err := os.MkdirAll(dir, 0700); err != nil {
-				t.Fatal(err)
-			}
+			_, dir := isolateClaudeDesktop(t)
 			if c.desktopAccount == "" {
 				c.desktopAccount = account
 			}
