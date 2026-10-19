@@ -11,22 +11,6 @@ import (
 	"strings"
 )
 
-func codexTaskID(id string) bool {
-	if len(id) != 36 {
-		return false
-	}
-	for i, c := range id {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-		} else if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return false
-		}
-	}
-	return true
-}
-
 // The catalog only suggests threads; the running app must confirm each one.
 func codexTaskCandidates(ctx context.Context, home string, limit int) []string {
 	if ctx.Err() != nil || limit <= 0 {
@@ -75,7 +59,7 @@ func codexTaskCandidates(ctx context.Context, home string, limit int) []string {
 		for rows.Next() && len(result) < limit {
 			var id, source string
 			var threadSource sql.NullString
-			if rows.Scan(&id, &source, &threadSource) != nil || !codexTaskID(id) || seen[id] {
+			if rows.Scan(&id, &source, &threadSource) != nil || !validUUID(id) || seen[id] {
 				continue
 			}
 			if source != "vscode" && source != `"vscode"` || !codexTaskThreadSource(threadSource.String) {

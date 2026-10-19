@@ -69,7 +69,6 @@ func (w *codexTaskWatch) run(ctx context.Context, opts codexTaskOptions, changed
 }
 
 func (w *codexTaskWatch) set(p TaskProvider, changed func()) {
-	p = normalizeTaskProvider(p)
 	w.mu.Lock()
 	moved := !sameTaskStatuses(w.value, p)
 	w.value = p

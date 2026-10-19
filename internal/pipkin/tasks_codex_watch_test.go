@@ -11,13 +11,15 @@ import (
 	"time"
 )
 
-// codexTestApp serves a fixture Codex app, one connection per dial, and can push
-// unsolicited frames to the latest connection or drop it as if the app quit.
+// codexTestApp serves a fixture Codex app, one connection per dial, records every
+// frame it receives, and can push unsolicited frames to the latest connection or
+// drop it as if the app quit.
 type codexTestApp struct {
-	handler func(map[string]any) []map[string]any
-	mu      sync.Mutex
-	dials   int
-	conns   []*codexTestAppConn
+	handler  func(map[string]any) []map[string]any
+	mu       sync.Mutex
+	dials    int
+	conns    []*codexTestAppConn
+	received []map[string]any
 }
 
 type codexTestAppConn struct {
@@ -82,7 +84,11 @@ func (a *codexTestApp) dial(context.Context) (net.Conn, error) {
 			if _, err := io.ReadFull(server, header[:]); err != nil {
 				return
 			}
-			body := make([]byte, binary.LittleEndian.Uint32(header[:]))
+			size := binary.LittleEndian.Uint32(header[:])
+			if size > 4096 {
+				return
+			}
+			body := make([]byte, size)
 			if _, err := io.ReadFull(server, body); err != nil {
 				return
 			}
@@ -90,6 +96,9 @@ func (a *codexTestApp) dial(context.Context) (net.Conn, error) {
 			if json.Unmarshal(body, &message) != nil {
 				return
 			}
+			a.mu.Lock()
+			a.received = append(a.received, message)
+			a.mu.Unlock()
 			for _, response := range a.handler(message) {
 				conn.push(response)
 			}
@@ -110,6 +119,12 @@ func (a *codexTestApp) dialCount() int {
 	return a.dials
 }
 
+func (a *codexTestApp) sent() []map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]map[string]any(nil), a.received...)
+}
+
 func codexTestState(id string, revision int, runtime, status string) map[string]any {
 	snapshot := codexTestSnapshot(runtime, status)
 	snapshot["id"] = id
@@ -117,22 +132,24 @@ func codexTestState(id string, revision int, runtime, status string) map[string]
 		"params": map[string]any{"conversationId": id, "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": revision, "conversationState": snapshot}}}
 }
 
-// codexTestFollowingApp owns every chat and answers each follow with a working snapshot.
-func codexTestFollowingApp(t *testing.T) *codexTestApp {
-	return newCodexTestApp(t, func(message map[string]any) []map[string]any {
-		switch message["method"] {
-		case "initialize":
-			return []map[string]any{{"type": "response", "method": "initialize", "requestId": message["requestId"], "resultType": "success"}}
-		case "thread-owner-discovery":
-			return []map[string]any{{"type": "response", "method": "thread-owner-discovery", "requestId": message["requestId"], "resultType": "success", "handledByClientId": codexTestOwner}}
-		case "thread-stream-following-changed":
-			params := message["params"].(map[string]any)
-			if params["following"] == true {
-				return []map[string]any{codexTestState(params["conversationId"].(string), 1, "active", "inProgress")}
-			}
+// codexTestFollowingHandler owns every chat and answers each follow with a working snapshot.
+func codexTestFollowingHandler(message map[string]any) []map[string]any {
+	switch message["method"] {
+	case "initialize":
+		return []map[string]any{{"type": "response", "method": "initialize", "requestId": message["requestId"], "resultType": "success"}}
+	case "thread-owner-discovery":
+		return []map[string]any{{"type": "response", "method": "thread-owner-discovery", "requestId": message["requestId"], "resultType": "success", "handledByClientId": codexTestOwner}}
+	case "thread-stream-following-changed":
+		params := message["params"].(map[string]any)
+		if params["following"] == true {
+			return []map[string]any{codexTestState(params["conversationId"].(string), 1, "active", "inProgress")}
 		}
-		return nil
-	})
+	}
+	return nil
+}
+
+func codexTestFollowingApp(t *testing.T) *codexTestApp {
+	return newCodexTestApp(t, codexTestFollowingHandler)
 }
 
 func codexTestWaitStatus(t *testing.T, changed <-chan struct{}, watch *codexTaskWatch, coverage, status string) {

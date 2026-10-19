@@ -3,6 +3,7 @@ package pipkin
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 )
 
 type codexTaskPatch struct {
@@ -12,7 +13,7 @@ type codexTaskPatch struct {
 }
 
 func codexTaskItemPatch(meta *codexTaskMeta, rest []any, patch codexTaskPatch) bool {
-	pending := meta.pendingCards > 0 || meta.uncertainCards || meta.pendingInput || meta.pendingPlan
+	pending := meta.pendingCards > 0 || meta.uncertainCards || meta.pendingInput
 	if len(rest) == 0 || len(rest) == 1 {
 		if pending || patch.Op == "remove" {
 			return true
@@ -31,7 +32,7 @@ func codexTaskItemPatch(meta *codexTaskMeta, rest []any, patch codexTaskPatch) b
 		}
 		for _, item := range items {
 			if len(item.Questions) > 0 && !bytes.Equal(item.Questions, []byte("null")) ||
-				item.Type == "userInputResponse" || item.Type == "planImplementation" {
+				item.Type == "userInputResponse" {
 				return true
 			}
 		}
@@ -39,7 +40,7 @@ func codexTaskItemPatch(meta *codexTaskMeta, rest []any, patch codexTaskPatch) b
 	}
 	field, _ := rest[1].(string)
 	switch field {
-	case "questions", "completed", "isCompleted", "requestId":
+	case "questions", "completed", "requestId":
 		return true
 	case "id", "type", "status":
 		return pending
@@ -80,13 +81,9 @@ func codexTaskApply(meta *codexTaskMeta, patch codexTaskPatch) (bool, error) {
 			var fields struct {
 				ActiveFlags json.RawMessage `json:"activeFlags"`
 			}
-			if json.Unmarshal(patch.Value, &fields) != nil || bytes.Equal(bytes.TrimSpace(fields.ActiveFlags), []byte("null")) {
+			if json.Unmarshal(patch.Value, &fields) != nil || bytes.Equal(bytes.TrimSpace(fields.ActiveFlags), []byte("null")) ||
+				slices.Contains(runtime.ActiveFlags, "") {
 				return false, errCodexTaskState
-			}
-			for _, flag := range runtime.ActiveFlags {
-				if flag == "" {
-					return false, errCodexTaskState
-				}
 			}
 			meta.runtime = runtime
 		case len(patch.Path) == 2 && patch.Path[1] == "type":
@@ -97,13 +94,8 @@ func codexTaskApply(meta *codexTaskMeta, patch codexTaskPatch) (bool, error) {
 			meta.runtime.Type = *value
 		case len(patch.Path) == 2 && patch.Path[1] == "activeFlags":
 			var flags []string
-			if json.Unmarshal(patch.Value, &flags) != nil || flags == nil {
+			if json.Unmarshal(patch.Value, &flags) != nil || flags == nil || slices.Contains(flags, "") {
 				return false, errCodexTaskState
-			}
-			for _, flag := range flags {
-				if flag == "" {
-					return false, errCodexTaskState
-				}
 			}
 			meta.runtime.ActiveFlags = flags
 		default:
@@ -114,13 +106,9 @@ func codexTaskApply(meta *codexTaskMeta, patch codexTaskPatch) (bool, error) {
 			return true, nil
 		}
 		var requests []codexTaskRequest
-		if json.Unmarshal(patch.Value, &requests) != nil || requests == nil {
+		if json.Unmarshal(patch.Value, &requests) != nil || requests == nil ||
+			slices.ContainsFunc(requests, func(r codexTaskRequest) bool { return r.Method == "" }) {
 			return false, errCodexTaskState
-		}
-		for _, request := range requests {
-			if request.Method == "" {
-				return false, errCodexTaskState
-			}
 		}
 		meta.humanRequest, meta.otherRequest = codexTaskRequests(requests)
 	case "updatedAt":
@@ -138,25 +126,17 @@ func codexTaskApply(meta *codexTaskMeta, patch codexTaskPatch) (bool, error) {
 		}
 	case "id", "source", "threadSource", "parentThreadId", "ephemeral", "sideConversation", "resumeState":
 		return true, nil
-	case "turns":
-		if len(patch.Path) <= 2 {
+	case "turns", "turnHistory":
+		field := 2
+		if root == "turnHistory" {
+			field = 4
+		}
+		if len(patch.Path) <= field || field == 4 && (patch.Path[1] != "history" || patch.Path[2] != "entitiesByKey") {
 			return true, nil
 		}
-		if patch.Path[2] == "items" {
-			return codexTaskItemPatch(meta, patch.Path[3:], patch), nil
-		}
-		switch patch.Path[2] {
-		case "turnId", "id", "status", "error":
-			return true, nil
-		}
-	case "turnHistory":
-		if len(patch.Path) <= 4 || patch.Path[1] != "history" || patch.Path[2] != "entitiesByKey" {
-			return true, nil
-		}
-		if patch.Path[4] == "items" {
-			return codexTaskItemPatch(meta, patch.Path[5:], patch), nil
-		}
-		switch patch.Path[4] {
+		switch patch.Path[field] {
+		case "items":
+			return codexTaskItemPatch(meta, patch.Path[field+1:], patch), nil
 		case "turnId", "id", "status", "error":
 			return true, nil
 		}

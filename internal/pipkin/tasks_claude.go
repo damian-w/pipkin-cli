@@ -123,7 +123,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 			var record claudeTaskRegistry
 			if !reader.decode(filepath.Join(dir, entry.Name()), claudeTaskRegistryLimit, &record) ||
 				record.PID != pid || record.Entrypoint != "claude-desktop" || record.Kind != "interactive" ||
-				!claudeTaskHostID(record.HostSessionID) || !validClaudeUUID(record.SessionID) ||
+				!claudeTaskHostID(record.HostSessionID) || !validUUID(record.SessionID) ||
 				!claudeTaskLocalDomain(record.PIDDomain, deps.goos, deps.hostname) {
 				continue
 			}
@@ -188,7 +188,7 @@ func collectClaudeTasksWith(ctx context.Context, deps claudeTaskDependencies) Ta
 				case bool(metadata.ErrorPresent):
 					// Errors are unverified, so report unknown rather than blocked.
 					candidate = "unknown"
-				case validClaudeUUID(metadata.LastAssistantUUID) &&
+				case validUUID(metadata.LastAssistantUUID) &&
 					metadata.PostTurnSummaryFor == metadata.LastAssistantUUID &&
 					(metadata.PostTurnSummary == nil || metadata.PostTurnSummary.SummarizesUUID == metadata.LastAssistantUUID):
 					wrap := metadata.TurnWrapUp

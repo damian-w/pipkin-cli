@@ -63,10 +63,6 @@ func TestCodexUsage(t *testing.T) {
 		}
 	}
 
-	r, err = parseCodexUsage([]byte(`{"rate_limit":{"primary_window":{"used_percent":null,"limit_window_seconds":18000},"secondary_window":{"used_percent":30,"limit_window_seconds":604800}}}`), "", "", observed)
-	if err != nil || r.SessionNoCap {
-		t.Fatal("an unreported session percentage is not an unlimited session")
-	}
 	r, err = parseCodexUsage([]byte(`{"rate_limit":{"primary_window":{"used_percent":40,"limit_window_seconds":604800},"secondary_window":{"used_percent":5,"limit_window_seconds":3600}}}`), "", "", observed)
 	if err != nil || r.Session == nil || r.Session.Seconds != 3600 || r.Weekly == nil || r.Weekly.Seconds != 604800 {
 		t.Fatal("durations must override both window positions")
@@ -174,6 +170,7 @@ func TestCodexAuthStoreTOML(t *testing.T) {
 func TestCodexMalformedWindowDoesNotImplyNoCap(t *testing.T) {
 	for _, primary := range []string{
 		`{"used_percent":50,"limit_window_seconds":999999999}`,
+		`{"used_percent":null,"limit_window_seconds":18000}`,
 		`{"used_percent":null,"limit_window_seconds":604800}`,
 		`{"used_percent":50,"limit_window_seconds":-1}`,
 	} {

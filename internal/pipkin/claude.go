@@ -179,7 +179,7 @@ func loadClaudeDesktopCredential(ctx context.Context, dir string, config claudeD
 		return claudeCredential{}, err
 	}
 	account := config.AccountUUID
-	if !validClaudeUUID(account) {
+	if !validUUID(account) {
 		return claudeCredential{}, errors.New("Claude Desktop's active account is unavailable; open Claude Desktop")
 	}
 	decrypt, err := claudeDecryptor(ctx, dir)
@@ -390,7 +390,7 @@ func queryClaudeOrgCookie(ctx context.Context, path string, decrypt func([]byte)
 			hash := sha256.Sum256([]byte(host))
 			value = string(bytes.TrimPrefix(plain, hash[:]))
 		}
-		if validClaudeUUID(value) {
+		if validUUID(value) {
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
@@ -407,7 +407,7 @@ func queryClaudeOrgCookie(ctx context.Context, path string, decrypt func([]byte)
 	return "", nil
 }
 
-func validClaudeUUID(s string) bool {
+func validUUID(s string) bool {
 	if len(s) != 36 {
 		return false
 	}
@@ -438,14 +438,14 @@ type claudeCacheEntry struct {
 func parseClaudeCacheKey(text, account string) (claudeCacheKey, bool) {
 	if strings.HasPrefix(text, "acct:") {
 		owner, remainder, ok := strings.Cut(text[5:], "|")
-		if !ok || !validClaudeUUID(account) || !strings.EqualFold(owner, account) {
+		if !ok || !validUUID(account) || !strings.EqualFold(owner, account) {
 			return claudeCacheKey{}, false
 		}
 		text = remainder
 	}
 	prefix, scopeText, ok := strings.Cut(text, ":https://api.anthropic.com:")
 	client, org, valid := strings.Cut(prefix, ":")
-	if !ok || !valid || !validClaudeUUID(client) || !validClaudeUUID(org) {
+	if !ok || !valid || !validUUID(client) || !validUUID(org) {
 		return claudeCacheKey{}, false
 	}
 	scopes := strings.Fields(scopeText)

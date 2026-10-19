@@ -32,15 +32,14 @@ type codexTaskRequest struct {
 }
 
 type codexTaskItem struct {
-	Type        string          `json:"type"`
-	ID          string          `json:"id"`
-	Questions   json.RawMessage `json:"questions"`
-	Content     json.RawMessage `json:"content"`
-	Input       json.RawMessage `json:"input"`
-	Status      string          `json:"status"`
-	Completed   *bool           `json:"completed"`
-	IsCompleted *bool           `json:"isCompleted"`
-	RequestID   json.RawMessage `json:"requestId"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	Questions json.RawMessage `json:"questions"`
+	Content   json.RawMessage `json:"content"`
+	Input     json.RawMessage `json:"input"`
+	Status    string          `json:"status"`
+	Completed *bool           `json:"completed"`
+	RequestID json.RawMessage `json:"requestId"`
 }
 
 type codexTaskTurn struct {
@@ -86,7 +85,6 @@ type codexTaskMeta struct {
 	pendingCards   int
 	uncertainCards bool
 	pendingInput   bool
-	pendingPlan    bool
 	tailKnown      bool
 	tailStatus     string
 	scope          int
@@ -134,31 +132,6 @@ func codexTaskScope(s codexTaskSnapshot, catalogRoot bool) int {
 		return 1
 	}
 	return 2
-}
-
-func codexTaskTail(s *codexTaskSnapshot) (*codexTaskTurn, bool) {
-	if s.TurnHistory.Kind == "canonical" {
-		islands := s.TurnHistory.History.Islands
-		if len(islands) == 0 {
-			return nil, false
-		}
-		tail := islands[len(islands)-1]
-		if tail.NewerBoundary.Status != "exhausted" {
-			return nil, false
-		}
-		if len(tail.Entries) == 0 {
-			return nil, true
-		}
-		turn, ok := s.TurnHistory.History.Entities[tail.Entries[len(tail.Entries)-1].Value]
-		return &turn, ok
-	}
-	if s.TurnHistory.Kind != "" || s.ResumeState == "needs_resume" || s.ResumeState == "resuming" {
-		return nil, false
-	}
-	if len(s.Turns) == 0 {
-		return nil, s.Turns != nil
-	}
-	return &s.Turns[len(s.Turns)-1], true
 }
 
 func codexTaskQuestionKey(value string) (string, bool) {
@@ -220,39 +193,33 @@ func codexTaskAnswers(raw json.RawMessage, answered map[string]bool) error {
 	return nil
 }
 
-func codexTaskTailInput(turn *codexTaskTurn) (input, plan bool) {
-	if turn == nil {
-		return false, false
-	}
+func codexTaskTailInput(turn *codexTaskTurn) bool {
 	for _, item := range turn.Items {
-		switch item.Type {
-		case "userInputResponse":
-			input = input || (item.Completed != nil && !*item.Completed && len(item.RequestID) > 0 && !bytes.Equal(item.RequestID, []byte("null")))
-		case "planImplementation":
-			plan = plan || (item.IsCompleted != nil && !*item.IsCompleted)
+		if item.Type == "userInputResponse" && item.Completed != nil && !*item.Completed && len(item.RequestID) > 0 && !bytes.Equal(item.RequestID, []byte("null")) {
+			return true
 		}
 	}
-	return input, plan
+	return false
 }
 
 // A running turn before a gap in loaded history leaves its cards uncertain.
-func codexTaskQuestionHistory(s *codexTaskSnapshot) ([]codexTaskTurn, int, error) {
+// The tail is known only when history is loaded up to the newest turn.
+func codexTaskHistory(s *codexTaskSnapshot) (turns []codexTaskTurn, certainFrom int, tailKnown bool, err error) {
 	if s.TurnHistory.Kind != "canonical" {
 		if s.TurnHistory.Kind != "" {
-			return nil, 0, nil
+			return nil, 0, false, nil
 		}
 		if len(s.Turns) > codexTaskMaxHistoryTurns {
-			return nil, 0, errCodexTaskState
+			return nil, 0, false, errCodexTaskState
 		}
-		certainFrom := 0
 		if s.ResumeState == "needs_resume" || s.ResumeState == "resuming" {
-			certainFrom = len(s.Turns)
+			return s.Turns, len(s.Turns), false, nil
 		}
-		return s.Turns, certainFrom, nil
+		return s.Turns, 0, s.Turns != nil, nil
 	}
 	islands := s.TurnHistory.History.Islands
 	turns, seen := []codexTaskTurn{}, map[string]bool{}
-	certainFrom := -1
+	certainFrom = -1
 	for index, island := range islands {
 		if index == len(islands)-1 && island.NewerBoundary.Status == "exhausted" {
 			certainFrom = len(turns)
@@ -260,26 +227,22 @@ func codexTaskQuestionHistory(s *codexTaskSnapshot) ([]codexTaskTurn, int, error
 		for _, entry := range island.Entries {
 			turn, exists := s.TurnHistory.History.Entities[entry.Value]
 			if !exists || seen[entry.Value] || len(turns) >= codexTaskMaxHistoryTurns {
-				return nil, 0, errCodexTaskState
+				return nil, 0, false, errCodexTaskState
 			}
 			seen[entry.Value] = true
 			turns = append(turns, turn)
 		}
 	}
 	if certainFrom < 0 {
-		certainFrom = len(turns)
+		return turns, len(turns), false, nil
 	}
-	return turns, certainFrom, nil
+	return turns, certainFrom, true, nil
 }
 
 // Like the Codex app, only cards in the latest running turn count, answered
 // only from that turn. Skip/Dismiss isn't in this stream, so a skipped card
 // still needs attention until the turn ends.
-func codexTaskPendingCards(s *codexTaskSnapshot) (cards int, uncertain bool, err error) {
-	turns, certainFrom, err := codexTaskQuestionHistory(s)
-	if err != nil {
-		return 0, false, err
-	}
+func codexTaskPendingCards(turns []codexTaskTurn, certainFrom int) (cards int, uncertain bool, err error) {
 	turnIndex := len(turns) - 1
 	for turnIndex >= 0 && turns[turnIndex].Status != "inProgress" {
 		turnIndex--
@@ -392,14 +355,17 @@ func codexTaskProject(raw json.RawMessage, id string, catalogRoot bool) (codexTa
 	if s.Requests == nil {
 		meta.otherRequest = true
 	}
-	tail, known := codexTaskTail(&s)
-	meta.tailKnown = known
-	if known && tail != nil {
-		meta.tailStatus = tail.Status
-		meta.pendingInput, meta.pendingPlan = codexTaskTailInput(tail)
+	turns, certainFrom, known, err := codexTaskHistory(&s)
+	if err != nil {
+		return codexTaskMeta{}, err
 	}
-	var err error
-	meta.pendingCards, meta.uncertainCards, err = codexTaskPendingCards(&s)
+	meta.tailKnown = known
+	if known && certainFrom < len(turns) {
+		tail := &turns[len(turns)-1]
+		meta.tailStatus = tail.Status
+		meta.pendingInput = codexTaskTailInput(tail)
+	}
+	meta.pendingCards, meta.uncertainCards, err = codexTaskPendingCards(turns, certainFrom)
 	if err != nil {
 		return codexTaskMeta{}, err
 	}

@@ -31,7 +31,7 @@ func fetchClaudeProfile(ctx context.Context, token string) (*claudeAccountProfil
 		return nil, err
 	}
 	var profile claudeAccountProfile
-	if json.Unmarshal(raw, &profile) != nil || !validClaudeUUID(profile.Account.UUID) || !validClaudeUUID(profile.Organization.UUID) {
+	if json.Unmarshal(raw, &profile) != nil || !validUUID(profile.Account.UUID) || !validUUID(profile.Organization.UUID) {
 		return nil, nil
 	}
 	return &profile, nil

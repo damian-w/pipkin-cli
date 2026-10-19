@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -97,57 +96,6 @@ func TestCodexTaskStateProjection(t *testing.T) {
 	}
 }
 
-func TestCodexTaskNativeCardsAndAcceptedReplies(t *testing.T) {
-	for _, kind := range []string{"unanswered", "finished", "user", "accepted", "unaccepted", "malformed"} {
-		t.Run(kind, func(t *testing.T) {
-			runtime, status := "active", "inProgress"
-			if kind == "finished" {
-				runtime, status = "idle", "completed"
-			}
-			snapshot := codexTestSnapshot(runtime, status)
-			items := []any{map[string]any{"type": "agentMessage", "id": "question", "questions": []any{map[string]any{"question": "private prompt"}}}}
-			if kind != "unanswered" && kind != "finished" {
-				identity := string(codexTestJSON(t, []any{"request_user_input_async", "question", 0}))
-				reply := map[string]any{"questionItemId": identity, "question": "private prompt", "answer": "private answer"}
-				if kind == "malformed" {
-					delete(reply, "answer")
-				}
-				text := "<send_user_message_question_reply>" + string(codexTestJSON(t, []any{reply})) + "</send_user_message_question_reply>"
-				item := map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": text}}}
-				if kind == "accepted" || kind == "unaccepted" {
-					item = map[string]any{"type": "steeringUserMessage", "status": "accepted", "input": item["content"]}
-					if kind == "unaccepted" {
-						item["status"] = "pending"
-					}
-				}
-				items = append(items, item)
-			}
-			snapshot["turns"] = []any{map[string]any{"turnId": "current", "status": status, "items": items}}
-			meta, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := "needs_attention"
-			switch kind {
-			case "finished":
-				want = "idle"
-			case "user", "accepted":
-				want = "working"
-			}
-			if meta.status() != want {
-				t.Fatalf("got %s, want %s", meta.status(), want)
-			}
-			observer := codexTaskObserver{streams: map[string]*codexTaskStream{codexTestID1: {meta: meta, valid: true}}}
-			output := string(codexTestJSON(t, observer.result()))
-			for _, private := range []string{"private prompt", "private answer", "questionItemId", codexTestID1} {
-				if strings.Contains(output, private) {
-					t.Fatalf("private field leaked: %s", private)
-				}
-			}
-		})
-	}
-}
-
 func codexTestCardReply(t *testing.T, kind string) map[string]any {
 	t.Helper()
 	if kind == "unanswered" {
@@ -219,6 +167,14 @@ func TestCodexTaskCardsCountOnlyInTheRunningTurn(t *testing.T) {
 				name = "canonical/" + kind
 			}
 			t.Run(name, func(t *testing.T) {
+				checkPrivate := func(meta codexTaskMeta) {
+					out := string(codexTestJSON(t, (&codexTaskObserver{streams: map[string]*codexTaskStream{codexTestID1: {meta: meta, valid: true}}}).result()))
+					for _, private := range []string{"private", "current-question", "questionItemId", codexTestID1} {
+						if strings.Contains(out, private) {
+							t.Fatal("card projection leaked private metadata")
+						}
+					}
+				}
 				snapshot := codexTestCardSnapshot(t, canonical, kind)
 				meta, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
 				if err != nil {
@@ -234,17 +190,13 @@ func TestCodexTaskCardsCountOnlyInTheRunningTurn(t *testing.T) {
 				if meta.status() != want || meta.pendingCards != count || meta.uncertainCards {
 					t.Fatalf("running turn state=%s cards=%d uncertain=%v, want %s/%d", meta.status(), meta.pendingCards, meta.uncertainCards, want, count)
 				}
+				checkPrivate(meta)
 				codexTestFinishLatestTurn(snapshot)
 				meta, err = codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
 				if err != nil || meta.status() != "idle" || meta.pendingCards != 0 {
 					t.Fatalf("finished turn kept a card: state=%s cards=%d err=%v", meta.status(), meta.pendingCards, err)
 				}
-				out := string(codexTestJSON(t, (&codexTaskObserver{streams: map[string]*codexTaskStream{codexTestID1: {meta: meta, valid: true}}}).result()))
-				for _, private := range []string{"private", "current-question", "questionItemId", codexTestID1} {
-					if strings.Contains(out, private) {
-						t.Fatal("card projection leaked private metadata")
-					}
-				}
+				checkPrivate(meta)
 			})
 		}
 	}
@@ -425,89 +377,6 @@ func TestCodexTaskPatchValidity(t *testing.T) {
 	}
 }
 
-func TestCodexTaskStreamGapAndOwnerInvalidate(t *testing.T) {
-	for _, changeOwner := range []bool{false, true} {
-		observer := codexTaskObserver{catalog: map[string]bool{codexTestID1: true}, streams: map[string]*codexTaskStream{codexTestID1: {owner: codexTestOwner, valid: true, revision: 2, meta: codexTaskMeta{scope: 1, runtime: codexTaskRuntime{Type: "active"}}}}}
-		owner := codexTestOwner
-		if changeOwner {
-			owner = codexTestID2
-		}
-		change := map[string]any{"type": "patches", "revision": 4, "baseRevision": 3, "patches": []any{}}
-		if err := observer.stream(codexTaskMessage{SourceClientID: owner}, codexTaskParams{ConversationID: codexTestID1, Change: codexTestJSON(t, change)}); err != nil {
-			t.Fatal(err)
-		}
-		if result := observer.result(); len(result.Tasks) != 1 || result.Tasks[0].Status != "unknown" || result.Tasks[0].UpdatedAt != nil {
-			t.Fatalf("invalidated stream kept status: %+v", result)
-		}
-	}
-}
-
-func codexTestBroker(t *testing.T, handler func(map[string]any) []map[string]any) (func(context.Context) (net.Conn, error), func() []map[string]any) {
-	t.Helper()
-	client, server := net.Pipe()
-	var mu sync.Mutex
-	var messages []map[string]any
-	out := make(chan map[string]any, 128)
-	done := make(chan struct{})
-	go func() {
-		defer server.Close()
-		for message := range out {
-			body, err := json.Marshal(message)
-			if err != nil {
-				return
-			}
-			frame := make([]byte, len(body)+4)
-			binary.LittleEndian.PutUint32(frame, uint32(len(body)))
-			copy(frame[4:], body)
-			if _, err := server.Write(frame); err != nil {
-				return
-			}
-		}
-	}()
-	go func() {
-		defer close(out)
-		defer close(done)
-		for {
-			var header [4]byte
-			if _, err := io.ReadFull(server, header[:]); err != nil {
-				return
-			}
-			size := binary.LittleEndian.Uint32(header[:])
-			if size > 4096 {
-				return
-			}
-			body := make([]byte, size)
-			if _, err := io.ReadFull(server, body); err != nil {
-				return
-			}
-			var message map[string]any
-			if json.Unmarshal(body, &message) != nil {
-				return
-			}
-			mu.Lock()
-			messages = append(messages, message)
-			mu.Unlock()
-			for _, response := range handler(message) {
-				out <- response
-			}
-		}
-	}()
-	t.Cleanup(func() {
-		client.Close()
-		server.Close()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Error("fixture broker did not stop")
-		}
-	})
-	return func(context.Context) (net.Conn, error) { return client, nil }, func() []map[string]any {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]map[string]any(nil), messages...)
-	}
-}
-
 func TestCodexTaskCollectorFindsBackgroundWithoutTaskActions(t *testing.T) {
 	for _, fileTimeout := range []bool{false, true} {
 		name := "network_timeout"
@@ -531,32 +400,22 @@ func (c codexTestFileTimeoutConn) Read(buffer []byte) (int, error) {
 
 func codexTestBackgroundCollection(t *testing.T, fileTimeout bool) {
 	t.Helper()
-	dial, sent := codexTestBroker(t, func(message map[string]any) []map[string]any {
+	app := newCodexTestApp(t, func(message map[string]any) []map[string]any {
+		responses := codexTestFollowingHandler(message)
 		switch message["method"] {
 		case "initialize":
-			return []map[string]any{
-				{"type": "response", "method": "initialize", "requestId": message["requestId"], "resultType": "success"},
-				{"type": "client-discovery-request", "requestId": "challenge"},
-				{"type": "broadcast", "method": "thread-stream-following-changed", "version": 1, "params": map[string]any{"conversationId": codexTestID1, "hostId": "local", "following": true}},
-			}
-		case "thread-owner-discovery":
-			return []map[string]any{{"type": "response", "method": "thread-owner-discovery", "requestId": message["requestId"], "resultType": "success", "handledByClientId": codexTestOwner}}
+			return append(responses,
+				map[string]any{"type": "client-discovery-request", "requestId": "challenge"},
+				map[string]any{"type": "broadcast", "method": "thread-stream-following-changed", "version": 1, "params": map[string]any{"conversationId": codexTestID1, "hostId": "local", "following": true}})
 		case "thread-stream-following-changed":
-			params := message["params"].(map[string]any)
-			if params["following"] != true {
-				return nil
-			}
-			id := params["conversationId"].(string)
-			snapshot := codexTestSnapshot("active", "inProgress")
-			snapshot["id"] = id
-			if id == codexTestID1 {
+			if len(responses) == 1 && message["params"].(map[string]any)["conversationId"] == codexTestID1 {
+				snapshot := responses[0]["params"].(map[string]any)["change"].(map[string]any)["conversationState"].(map[string]any)
 				snapshot["turns"] = []any{map[string]any{"status": "inProgress", "items": []any{map[string]any{"type": "agentMessage", "id": "native", "questions": []any{map[string]any{"question": "private question"}}}}}}
 			}
-			return []map[string]any{{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": codexTestOwner,
-				"params": map[string]any{"conversationId": id, "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": 1, "conversationState": snapshot}}}}
 		}
-		return nil
+		return responses
 	})
+	dial := app.dial
 	if fileTimeout {
 		originalDial := dial
 		dial = func(ctx context.Context) (net.Conn, error) {
@@ -580,7 +439,7 @@ func codexTestBackgroundCollection(t *testing.T, fileTimeout bool) {
 		t.Fatalf("statuses=%v", statuses)
 	}
 	negative := false
-	for _, message := range sent() {
+	for _, message := range app.sent() {
 		method, _ := message["method"].(string)
 		if method == "thread-stream-following-changed" {
 			targets, ok := message["targetClientIds"].([]any)
@@ -627,7 +486,7 @@ func TestCodexTaskCatalogIsReadOnlyAndFiltersSources(t *testing.T) {
 func TestCodexTaskCollectorRejectsVersionsResetAndDisconnect(t *testing.T) {
 	for _, kind := range []string{"version", "reset", "disconnect"} {
 		t.Run(kind, func(t *testing.T) {
-			dial, _ := codexTestBroker(t, func(message map[string]any) []map[string]any {
+			dial := newCodexTestApp(t, func(message map[string]any) []map[string]any {
 				if message["method"] != "initialize" {
 					return nil
 				}
@@ -639,7 +498,7 @@ func TestCodexTaskCollectorRejectsVersionsResetAndDisconnect(t *testing.T) {
 					return append(responses, map[string]any{"type": "broadcast", "method": "ipc-connection-reset", "version": 1, "params": map[string]any{}})
 				}
 				return nil
-			})
+			}).dial
 			if kind == "disconnect" {
 				dial = func(context.Context) (net.Conn, error) {
 					client, server := net.Pipe()
@@ -696,12 +555,14 @@ func TestCodexTaskStaleSnapshotsCannotRepairInvalidatedStream(t *testing.T) {
 	for _, cause := range []string{"gap", "unsupported patch", "owner change", "owner disconnected"} {
 		t.Run(cause, func(t *testing.T) {
 			stream := &codexTaskStream{owner: codexTestOwner, valid: true, revision: 5, floor: 5,
-				meta: codexTaskMeta{scope: 1, runtime: codexTaskRuntime{Type: "active", ActiveFlags: []string{}}}}
+				meta: codexTaskMeta{scope: 1, updated: new(int64(1767225600)), runtime: codexTaskRuntime{Type: "active", ActiveFlags: []string{}}}}
 			observer := codexTaskObserver{initialized: true, catalog: map[string]bool{codexTestID1: true}, streams: map[string]*codexTaskStream{codexTestID1: stream}, resyncs: 6}
 			owner := codexTestOwner
 			base := 5
-			patches := []any{map[string]any{"op": "replace", "path": []any{"turns", 0, "status"}, "value": "failed"}}
+			patches := []any{}
 			switch cause {
+			case "unsupported patch":
+				patches = []any{map[string]any{"op": "replace", "path": []any{"turns", 0, "status"}, "value": "failed"}}
 			case "gap":
 				base = 4
 			case "owner change":
@@ -720,8 +581,8 @@ func TestCodexTaskStaleSnapshotsCannotRepairInvalidatedStream(t *testing.T) {
 			if err := observer.stream(codexTaskMessage{SourceClientID: codexTestOwner}, codexTaskParams{ConversationID: codexTestID1, Change: codexTestJSON(t, map[string]any{"type": "snapshot", "revision": 4, "conversationState": codexTestSnapshot("idle", "completed")})}); err != nil {
 				t.Fatal(err)
 			}
-			if stream.valid || observer.result().Tasks[0].Status != "unknown" {
-				t.Fatal("stale snapshot revived status after invalidation")
+			if result := observer.result(); stream.valid || len(result.Tasks) != 1 || result.Tasks[0].Status != "unknown" || result.Tasks[0].UpdatedAt != nil {
+				t.Fatalf("stale snapshot revived status after invalidation: %+v", result)
 			}
 		})
 	}
@@ -805,15 +666,19 @@ func TestCodexTaskLive(t *testing.T) {
 	if os.Getenv("PIPKIN_LIVE_TEST_TASKS") != "1" {
 		t.Skip("live task collection is opt-in")
 	}
-	home, err := codexTaskHome()
-	if err != nil {
-		t.Fatal("task home unavailable")
+	opts, coverage := codexDesktopTasks()
+	if coverage != "" {
+		t.Fatalf("task collection %s", coverage)
 	}
-	result := collectCodexTasksWith(context.Background(), codexTaskOptions{
-		dial:       openCodexDesktopIPC,
-		candidates: func(ctx context.Context) []string { return codexTaskCandidates(ctx, home, codexTaskMaxCandidates) },
-		budget:     codexTaskBudget,
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	conn, err := openCodexDesktopIPC(ctx)
+	if err != nil {
+		// Errors are fixed stage descriptions, never paths, PIDs or user IDs.
+		t.Fatalf("native Codex transport stage: %v", err)
+	}
+	conn.Close()
+	result := collectCodexTasksWith(context.Background(), opts)
 	t.Logf("coverage=%s tasks=%d", result.Coverage, len(result.Tasks))
 	if result.Coverage == "unavailable" {
 		t.Fatal("existing GUI task collection unavailable")

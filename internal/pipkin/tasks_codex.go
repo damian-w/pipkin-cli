@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
-	"os"
 	"runtime"
 	"strconv"
 	"time"
@@ -36,8 +34,6 @@ const (
 	codexTaskRediscoverEvery = time.Minute
 	codexTaskInitializeWait  = 5 * time.Second
 )
-
-var errCodexTaskDial = errors.New("Codex local connection is unavailable")
 
 type codexTaskOptions struct {
 	dial       func(context.Context) (net.Conn, error)
@@ -189,7 +185,7 @@ func openCodexTaskObserver(ctx context.Context, opts codexTaskOptions, publish f
 	o.prefix = hex.EncodeToString(nonce[:])
 	conn, err := opts.dial(ctx)
 	if err != nil {
-		return nil, errCodexTaskDial
+		return nil, err
 	}
 	o.conn, o.connected = conn, time.Now()
 	o.stop = context.AfterFunc(ctx, func() { conn.Close() })
@@ -380,7 +376,7 @@ func (o *codexTaskObserver) until(now time.Time, wait time.Duration) time.Time {
 }
 
 func (o *codexTaskObserver) enqueue(id string, priority bool) {
-	if !codexTaskID(id) || o.watching(id) {
+	if !validUUID(id) || o.watching(id) {
 		return
 	}
 	if o.queued[id] {
@@ -454,17 +450,8 @@ func (o *codexTaskObserver) send(message map[string]any) error {
 	if err := o.conn.SetWriteDeadline(o.until(time.Now(), 200*time.Millisecond)); err != nil {
 		return err
 	}
-	for len(frame) > 0 {
-		n, err := o.conn.Write(frame)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		frame = frame[n:]
-	}
-	return nil
+	_, err = o.conn.Write(frame)
+	return err
 }
 
 func (o *codexTaskObserver) follow(id string, value bool) error {
@@ -541,7 +528,7 @@ func (o *codexTaskObserver) receive(frame []byte) error {
 		}
 		delete(o.lookups, requestID)
 		previous := o.streams[lookup.id]
-		if message.Method == "thread-owner-discovery" && message.ResultType == "success" && codexTaskID(message.HandledByClientID) {
+		if message.Method == "thread-owner-discovery" && message.ResultType == "success" && validUUID(message.HandledByClientID) {
 			if previous != nil && !previous.retired || o.followed() >= codexTaskMaxStreams {
 				return nil
 			}
@@ -578,7 +565,7 @@ func (o *codexTaskObserver) receive(frame []byte) error {
 			}
 			return nil
 		}
-		if params.HostID != "local" || !codexTaskID(params.ConversationID) {
+		if params.HostID != "local" || !validUUID(params.ConversationID) {
 			return nil
 		}
 		if message.Method == "thread-stream-following-changed" && params.Following || message.Method == "thread-stream-following-status-requested" {
@@ -622,9 +609,6 @@ func (o *codexTaskObserver) stream(message codexTaskMessage, params codexTaskPar
 	stream.floor = *change.Revision
 	switch change.Type {
 	case "snapshot":
-		if stream.valid && *change.Revision < stream.revision {
-			return nil
-		}
 		meta, err := codexTaskProject(change.ConversationState, id, o.catalog[id])
 		stream.valid, stream.waiting = err == nil, false
 		if err == nil {
@@ -679,9 +663,6 @@ func (o *codexTaskObserver) result() TaskProvider {
 }
 
 func codexTaskReadTimedOut(err error) bool {
-	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
 	// Named-pipe deadline errors implement Timeout but not net.Error.
 	var timeout interface{ Timeout() bool }
 	return errors.As(err, &timeout) && timeout.Timeout()

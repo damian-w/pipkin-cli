@@ -12,24 +12,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func codexTransportTestNamedPipe(t *testing.T, worldAccess bool) (string, windows.Handle, *windows.SID) {
-	t.Helper()
-	extra := ""
-	if worldAccess {
-		extra = "(A;;GA;;;WD)"
-	}
-	return codexTransportTestNamedPipeAccess(t, extra)
-}
-
-func codexTransportTestNamedPipeAccess(t *testing.T, extra string) (string, windows.Handle, *windows.SID) {
+func codexTransportTestNamedPipe(t *testing.T, extra string) (string, windows.Handle, *windows.SID) {
 	t.Helper()
 	sid, err := processUserSID(windows.CurrentProcess())
 	if err != nil {
 		t.Fatal(err)
 	}
-	dacl := "D:P(A;;GA;;;" + sid.String() + ")(A;;GA;;;SY)"
-	dacl += extra
-	sd, err := windows.SecurityDescriptorFromString(dacl)
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;" + sid.String() + ")(A;;GA;;;SY)" + extra)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +46,7 @@ func codexTransportConnectTestServer(t *testing.T, server windows.Handle) {
 }
 
 func TestCodexTransportWindowsOverlappedPipeRoundTrip(t *testing.T) {
-	name, server, sid := codexTransportTestNamedPipe(t, false)
+	name, server, sid := codexTransportTestNamedPipe(t, "")
 	conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error {
 		var pid uint32
 		if err := windows.GetNamedPipeServerProcessId(handle, &pid); err != nil {
@@ -95,17 +84,8 @@ func TestCodexTransportWindowsOverlappedPipeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCodexTransportWindowsRejectsOtherUserPipeAccess(t *testing.T) {
-	name, _, sid := codexTransportTestNamedPipe(t, true)
-	if conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error {
-		return validateCodexPipeDACL(handle, sid)
-	}); err == nil || conn != nil {
-		t.Fatalf("accepted public synthetic pipe: %v, %v", conn, err)
-	}
-}
-
 func TestCodexTransportWindowsDefaultReadAccess(t *testing.T) {
-	name, _, sid := codexTransportTestNamedPipeAccess(t, "(A;;0x00120089;;;WD)(A;;0x00120089;;;AN)")
+	name, _, sid := codexTransportTestNamedPipe(t, "(A;;0x00120089;;;WD)(A;;0x00120089;;;AN)")
 	conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error {
 		return validateCodexPipeDACL(handle, sid)
 	})
@@ -123,7 +103,7 @@ func TestCodexTransportWindowsRejectsForeignModification(t *testing.T) {
 		"0x00000010", "0x00000100", // Write attributes/extended attributes.
 	} {
 		t.Run(rights, func(t *testing.T) {
-			name, _, sid := codexTransportTestNamedPipeAccess(t, "(A;;"+rights+";;;WD)")
+			name, _, sid := codexTransportTestNamedPipe(t, "(A;;"+rights+";;;WD)")
 			if conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error {
 				return validateCodexPipeDACL(handle, sid)
 			}); err == nil || conn != nil {
@@ -142,7 +122,7 @@ func TestCodexTransportWindowsLogonTrustIsExplicit(t *testing.T) {
 	}
 	for _, verified := range []bool{false, true} {
 		t.Run(fmt.Sprint(verified), func(t *testing.T) {
-			name, _, sid := codexTransportTestNamedPipeAccess(t, "(A;;GA;;;"+id.String()+")")
+			name, _, sid := codexTransportTestNamedPipe(t, "(A;;GA;;;"+id.String()+")")
 			conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error {
 				if verified {
 					return validateCodexPipeDACL(handle, sid, id)
@@ -160,14 +140,14 @@ func TestCodexTransportWindowsLogonTrustIsExplicit(t *testing.T) {
 }
 
 func TestCodexTransportWindowsRejectsUnrelatedServer(t *testing.T) {
-	name, _, _ := codexTransportTestNamedPipe(t, false)
+	name, _, _ := codexTransportTestNamedPipe(t, "")
 	if conn, err := openCodexNamedPipe(context.Background(), name, validateCodexNamedPipePeer); err == nil || conn != nil {
 		t.Fatalf("test process was accepted as Codex GUI: %v, %v", conn, err)
 	}
 }
 
 func TestCodexTransportWindowsNativeReadCancellation(t *testing.T) {
-	name, server, sid := codexTransportTestNamedPipe(t, false)
+	name, server, sid := codexTransportTestNamedPipe(t, "")
 	conn, err := openCodexNamedPipe(context.Background(), name, func(handle windows.Handle) error { return validateCodexPipeDACL(handle, sid) })
 	if err != nil {
 		t.Fatal(err)
@@ -184,18 +164,4 @@ func TestCodexTransportWindowsNativeReadCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("native named pipe read ignored close")
 	}
-}
-
-func TestCodexTransportLive(t *testing.T) {
-	if os.Getenv("PIPKIN_LIVE_TEST_TASKS") != "1" {
-		t.Skip("requires explicit local GUI task validation")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	conn, err := openCodexDesktopIPC(ctx)
-	if err != nil {
-		// Errors are fixed stage descriptions, never paths, PIDs or user IDs.
-		t.Fatalf("native Codex transport stage: %v", err)
-	}
-	conn.Close()
 }
