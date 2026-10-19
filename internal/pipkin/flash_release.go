@@ -19,21 +19,19 @@ import (
 
 const firmwareRepository = "damian-w/pipkin"
 
-// The only board the firmware supports. Its single-app ESP-IDF layout keeps
-// board settings in NVS, between the partition table and the application.
+// The first supported board, the 2.8-inch CYD. Its release assets keep the plain
+// names: firmware.json, bootloader.bin, partition-table.bin and pipkin.bin.
 const firmwareBoard = "esp32-2432s028r"
 
-// Each release also carries a demo reel build of its application, versioned
-// <version>-demo, which only 'pipkin flash --demo' installs. firmware.json does
-// not list it, so it never changes what a normal flash writes.
+// Each release also carries a demo reel build of each board's application,
+// versioned <version>-demo, which only 'pipkin flash --demo' installs. The
+// manifests do not list it, so it never changes what a normal flash writes.
 const (
 	demoFirmwareFile   = "pipkin-demo.bin"
 	demoFirmwareSuffix = "-demo"
 )
 
 const (
-	bootloaderOffset     = 0x1000
-	bootloaderMaxSize    = 0x7000
 	partitionTableOffset = 0x8000
 	partitionTableSize   = 0xc00
 	nvsOffset            = 0x9000
@@ -63,12 +61,26 @@ type firmwareManifest struct {
 }
 
 type firmwareRelease struct {
+	// The selected board's manifest, which is the CYD's until selectBoard.
 	Manifest firmwareManifest
 	Folder   string
 	Tag      string
+	// Every board's manifest in the release, by board ID.
+	boards map[string]firmwareManifest
 }
 
 func (r *firmwareRelease) close() { os.RemoveAll(r.Folder) }
+
+// selectBoard narrows the release to one board's images, which it may not have:
+// releases before the 4-inch board carry only the CYD's.
+func (r *firmwareRelease) selectBoard(board displayBoard) error {
+	manifest, ok := r.boards[board.ID]
+	if !ok {
+		return fmt.Errorf("firmware %s doesn't support the %s display; install a newer release, or update Pipkin with 'pipkin update'", r.Tag, board.Name)
+	}
+	r.Manifest = manifest
+	return nil
+}
 
 func (r *firmwareRelease) image(role string) (firmwareImage, string) {
 	for _, image := range r.Manifest.Images {
@@ -80,7 +92,7 @@ func (r *firmwareRelease) image(role string) (firmwareImage, string) {
 }
 
 // validateFirmwareManifest accepts only firmware with this CLI's major version,
-// for the one supported board and flash layout.
+// for a supported board and the shared flash layout.
 func validateFirmwareManifest(m firmwareManifest, tag string) error {
 	if m.Product != "pipkin" {
 		return errors.New("unsupported firmware manifest")
@@ -98,8 +110,9 @@ func validateFirmwareManifest(m firmwareManifest, tag string) error {
 	if !firmwareRevision.MatchString(m.SourceRevision) {
 		return errors.New("firmware manifest has no valid source revision")
 	}
-	if m.Board != firmwareBoard {
-		return errors.New("release does not support the ESP32-2432S028R board")
+	board, ok := boardByID(m.Board)
+	if !ok {
+		return errors.New("release is for a board this version of Pipkin doesn't support")
 	}
 	if len(m.Images) != 3 {
 		return errors.New("release must contain bootloader, partition table and application images")
@@ -108,9 +121,9 @@ func validateFirmwareManifest(m firmwareManifest, tag string) error {
 		file        string
 		offset, max int64
 	}{
-		"bootloader":      {"bootloader.bin", bootloaderOffset, bootloaderMaxSize},
-		"partition-table": {"partition-table.bin", partitionTableOffset, partitionTableSize},
-		"application":     {"pipkin.bin", applicationOffset, applicationMaxSize},
+		"bootloader":      {board.imageFile("bootloader"), board.BootloaderOffset, board.BootloaderMaxSize},
+		"partition-table": {board.imageFile("partition-table"), partitionTableOffset, partitionTableSize},
+		"application":     {board.imageFile("application"), applicationOffset, applicationMaxSize},
 	}
 	seen := map[string]bool{}
 	for _, image := range m.Images {
@@ -227,25 +240,6 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent strin
 	if err != nil {
 		return nil, err
 	}
-	manifestData, err := fetch("firmware.json", 32<<10)
-	if err != nil {
-		return nil, err
-	}
-	if sums["firmware.json"] != sha256Hex(manifestData) {
-		return nil, errors.New("firmware manifest failed its release checksum")
-	}
-	var manifest firmwareManifest
-	decoder := json.NewDecoder(bytes.NewReader(manifestData))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
-		return nil, fmt.Errorf("invalid firmware manifest: %w", err)
-	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return nil, errors.New("firmware manifest contains trailing data")
-	}
-	if err := validateFirmwareManifest(manifest, release.Tag); err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return nil, err
 	}
@@ -253,51 +247,92 @@ func (s firmwareSource) stage(ctx context.Context, selectedVersion, parent strin
 	if err != nil {
 		return nil, err
 	}
-	staged := &firmwareRelease{Manifest: manifest, Folder: folder, Tag: release.Tag}
+	staged := &firmwareRelease{Folder: folder, Tag: release.Tag, boards: map[string]firmwareManifest{}}
 	defer func() {
 		if err != nil {
 			staged.close()
 		}
 	}()
+	// Every release has the CYD's firmware.json. Other boards' manifests are optional,
+	// and each is checked as strictly when present.
+	for _, board := range displayBoards {
+		if _, ok := assets[board.manifestFile()]; !ok && board.ID != firmwareBoard {
+			continue
+		}
+		manifest, err := s.stageBoard(fetch, sums, folder, release.Tag, board, demo)
+		if err != nil {
+			return nil, err
+		}
+		staged.boards[board.ID] = manifest
+	}
+	staged.Manifest = staged.boards[firmwareBoard]
+	return staged, nil
+}
+
+// stageBoard downloads and checks one board's manifest and images, and its demo
+// reel when asked and the release has one.
+func (s firmwareSource) stageBoard(fetch func(string, int64) ([]byte, error), sums map[string]string, folder, tag string, board displayBoard, demo bool) (firmwareManifest, error) {
+	var manifest firmwareManifest
+	name := board.manifestFile()
+	manifestData, err := fetch(name, 32<<10)
+	if err != nil {
+		return manifest, err
+	}
+	if sums[name] != sha256Hex(manifestData) {
+		return manifest, errors.New("firmware manifest failed its release checksum")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(manifestData))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return manifest, fmt.Errorf("invalid firmware manifest: %w", err)
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return manifest, errors.New("firmware manifest contains trailing data")
+	}
+	if err := validateFirmwareManifest(manifest, tag); err != nil {
+		return manifest, err
+	}
+	if manifest.Board != board.ID {
+		return manifest, fmt.Errorf("%s describes another board", name)
+	}
 	for _, image := range manifest.Images {
 		if sums[image.File] != image.SHA256 {
-			return nil, fmt.Errorf("%s manifest and release checksums disagree", image.File)
+			return manifest, fmt.Errorf("%s manifest and release checksums disagree", image.File)
 		}
 		data, err := fetch(image.File, image.Size)
 		if err != nil {
-			return nil, err
+			return manifest, err
 		}
 		if int64(len(data)) != image.Size || sha256Hex(data) != image.SHA256 {
-			return nil, fmt.Errorf("%s failed its release checksum or size check", image.File)
+			return manifest, fmt.Errorf("%s failed its release checksum or size check", image.File)
 		}
 		if err := validateFirmwareImage(image, data, manifest); err != nil {
-			return nil, fmt.Errorf("%s is incompatible: %w", image.File, err)
+			return manifest, fmt.Errorf("%s is incompatible: %w", image.File, err)
 		}
 		if err := os.WriteFile(filepath.Join(folder, image.File), data, 0o600); err != nil {
-			return nil, err
+			return manifest, err
 		}
 	}
-	if demo {
-		// The demo reel takes the application's place, so it passes the same checks.
-		data, err := fetch(demoFirmwareFile, applicationMaxSize)
-		if err != nil {
-			return nil, err
-		}
-		image := firmwareImage{Role: "application", File: demoFirmwareFile, Offset: applicationOffset,
-			Size: int64(len(data)), SHA256: sums[demoFirmwareFile]}
-		if sha256Hex(data) != image.SHA256 {
-			return nil, fmt.Errorf("%s failed its release checksum", demoFirmwareFile)
-		}
-		reel := manifest
-		reel.Version += demoFirmwareSuffix
-		if err := validateFirmwareImage(image, data, reel); err != nil {
-			return nil, fmt.Errorf("%s is incompatible: %w", demoFirmwareFile, err)
-		}
-		if err := os.WriteFile(filepath.Join(folder, demoFirmwareFile), data, 0o600); err != nil {
-			return nil, err
-		}
+	reelFile := board.demoFile()
+	if _, ok := sums[reelFile]; !demo || !ok {
+		return manifest, nil
 	}
-	return staged, nil
+	// The demo reel takes the application's place, so it passes the same checks.
+	data, err := fetch(reelFile, applicationMaxSize)
+	if err != nil {
+		return manifest, err
+	}
+	image := firmwareImage{Role: "application", File: reelFile, Offset: applicationOffset,
+		Size: int64(len(data)), SHA256: sums[reelFile]}
+	if sha256Hex(data) != image.SHA256 {
+		return manifest, fmt.Errorf("%s failed its release checksum", reelFile)
+	}
+	reel := manifest
+	reel.Version += demoFirmwareSuffix
+	if err := validateFirmwareImage(image, data, reel); err != nil {
+		return manifest, fmt.Errorf("%s is incompatible: %w", reelFile, err)
+	}
+	return manifest, os.WriteFile(filepath.Join(folder, reelFile), data, 0o600)
 }
 
 func stableVersionNumbers(text string) ([3]uint64, bool) {

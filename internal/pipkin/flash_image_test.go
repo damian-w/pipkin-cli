@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,7 @@ func testPartitionTable() []byte {
 }
 
 func testImageManifest() firmwareManifest {
-	return firmwareManifest{Product: "pipkin", Version: "1.0.0", SourceRevision: strings.Repeat("a", 40)}
+	return firmwareManifest{Product: "pipkin", Version: "1.0.0", SourceRevision: strings.Repeat("a", 40), Board: firmwareBoard}
 }
 
 func testImageMetadata(role string, data []byte) firmwareImage {
@@ -216,7 +217,7 @@ func TestReadPipkinFirmwareVersionFromPrefix(t *testing.T) {
 			data := buildTestESPImage(version, "local-source")
 			// A prefix lacks the full image digest and source revision. Both are
 			// intentionally unnecessary when identifying previously stored firmware.
-			got, ok := readPipkinFirmwareVersion(data[:288])
+			got, ok := readPipkinFirmwareVersion(data[:288], 0)
 			if !ok || got != version {
 				t.Fatalf("got %q, %t; want %q", got, ok, version)
 			}
@@ -242,13 +243,17 @@ func TestReadPipkinFirmwareVersionRejectsOtherOrMalformedImages(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			data := mutate(buildTestESPImage("1.0.0", strings.Repeat("a", 40)))
-			if got, ok := readPipkinFirmwareVersion(data); ok {
+			if got, ok := readPipkinFirmwareVersion(data, 0); ok {
 				t.Fatalf("accepted %s as Pipkin %q", name, got)
 			}
 		})
 	}
-	if got, ok := readPipkinFirmwareVersion(testESPImageSegments([]byte("bootloader"))); ok {
+	if got, ok := readPipkinFirmwareVersion(testESPImageSegments([]byte("bootloader")), 0); ok {
 		t.Fatalf("accepted bootloader as Pipkin %q", got)
+	}
+	// Stored firmware for one chip is not taken for the other's.
+	if got, ok := readPipkinFirmwareVersion(buildTestESPImage("1.0.0", strings.Repeat("a", 40)), 9); ok {
+		t.Fatalf("accepted an ESP32 image as ESP32-S3 Pipkin %q", got)
 	}
 }
 
@@ -257,29 +262,37 @@ func TestPackagedFirmwareImages(t *testing.T) {
 	if dir == "" {
 		t.Skip("set PIPKIN_FIRMWARE_TEST_DIR to validate an ESP-IDF release package")
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "firmware.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest firmwareManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	for _, image := range manifest.Images {
-		t.Run(image.Role, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(dir, image.File))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := validateFirmwareImage(image, data, manifest); err != nil {
-				t.Fatal(err)
-			}
-			if image.Role == "application" {
-				got, ok := readPipkinFirmwareVersion(data[:1024])
-				if !ok || got != manifest.Version {
-					t.Fatalf("stored firmware prefix identified as %q, %t", got, ok)
+	for _, board := range displayBoards {
+		data, err := os.ReadFile(filepath.Join(dir, board.manifestFile()))
+		if errors.Is(err, os.ErrNotExist) && board.ID != firmwareBoard {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var manifest firmwareManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateFirmwareManifest(manifest, "v"+manifest.Version); err != nil || manifest.Board != board.ID {
+			t.Fatalf("%s: %v", board.manifestFile(), err)
+		}
+		for _, image := range manifest.Images {
+			t.Run(board.ID+"/"+image.Role, func(t *testing.T) {
+				data, err := os.ReadFile(filepath.Join(dir, image.File))
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-		})
+				if err := validateFirmwareImage(image, data, manifest); err != nil {
+					t.Fatal(err)
+				}
+				if image.Role == "application" {
+					got, ok := readPipkinFirmwareVersion(data[:1024], board.ChipID)
+					if !ok || got != manifest.Version {
+						t.Fatalf("stored firmware prefix identified as %q, %t", got, ok)
+					}
+				}
+			})
+		}
 	}
 }

@@ -65,9 +65,12 @@ var flashToolAssets = map[string]flashToolAsset{
 type flashTool struct {
 	path   string
 	output io.Writer
+	// The chip the last probe found, as esptool's --chip names it. Reads, writes
+	// and erases go to that chip only.
+	chip string
 }
 type flashProbe struct {
-	Chip       string
+	Chip       string // a supported board's chip, as esptool's --chip names it
 	FlashBytes int64
 	MAC        string
 	// Secure boot or flash encryption is enabled.
@@ -447,10 +450,11 @@ func parseFlashProbe(data []byte) (flashProbe, error) {
 	if len(chip) != 1 || len(size) != 1 || len(mac) != 1 {
 		return probe, errors.New("could not establish the board's chip, flash size and MAC from esptool")
 	}
-	probe.Chip = strings.ToLower(string(chip[0][1]))
-	if probe.Chip != "esp32" {
-		return probe, fmt.Errorf("unsupported chip %s; Pipkin requires a classic ESP32 CYD", probe.Chip)
+	board, ok := boardByChip(string(chip[0][1]))
+	if !ok {
+		return probe, fmt.Errorf("unsupported chip %s; Pipkin runs on an ESP32 CYD or an ESP32-S3 ES3C40P", terminalText(string(chip[0][1])))
 	}
+	probe.Chip = board.Chip
 	n, err := strconv.ParseInt(string(size[0][1]), 10, 64)
 	if err != nil || n <= 0 || n > 256 {
 		return probe, errors.New("invalid detected flash size")
@@ -461,6 +465,21 @@ func parseFlashProbe(data []byte) (flashProbe, error) {
 	}
 	probe.MAC = strings.ToLower(string(mac[0][1]))
 	return probe, nil
+}
+
+var (
+	toolSecureBootLine = regexp.MustCompile(`(?m)^Secure Boot:\s*(Enabled|Disabled)\s*$`)
+	toolEncryptionLine = regexp.MustCompile(`(?m)^Flash Encryption:\s*(Enabled|Disabled)\s*$`)
+)
+
+// parseToolSecurity reads get-security-info, which chips after the classic ESP32
+// support. Anything but both lines saying Disabled counts as secured.
+func parseToolSecurity(data []byte) (bool, error) {
+	boot, encryption := toolSecureBootLine.FindAllSubmatch(data, -1), toolEncryptionLine.FindAllSubmatch(data, -1)
+	if len(boot) != 1 || len(encryption) != 1 {
+		return false, errors.New("could not establish the board's secure boot and flash encryption state")
+	}
+	return string(boot[0][1]) != "Disabled" || string(encryption[0][1]) != "Disabled", nil
 }
 
 func parseToolRegister(data []byte, address uint32) (uint32, error) {
@@ -487,6 +506,17 @@ func (t *flashTool) Probe(ctx context.Context, port string) (flashProbe, error) 
 		return probe, err
 	}
 	args, _ = toolPortArgs(port, "no-reset", "no-reset", true)
+	if probe.Chip != "esp32" {
+		data, err = t.run(ctx, 25*time.Second, append(args, "get-security-info")...)
+		if err != nil {
+			return probe, fmt.Errorf("could not check board security: %w", err)
+		}
+		if probe.Secure, err = parseToolSecurity(data); err != nil {
+			return probe, err
+		}
+		t.chip = probe.Chip
+		return probe, nil
+	}
 	var registers [2]uint32
 	// Classic ESP32 predates the ROM get-security-info command. These read-only
 	// eFuse registers/masks are defined by Espressif's ESP32 target specification:
@@ -503,7 +533,16 @@ func (t *flashTool) Probe(ctx context.Context, port string) (flashProbe, error) 
 	}
 	flashEncrypted := bits.OnesCount32((registers[0]>>20)&0x7f)%2 != 0
 	probe.Secure = flashEncrypted || registers[1]&0x30 != 0
+	t.chip = probe.Chip
 	return probe, nil
+}
+
+// chipArgs names the probed chip, so esptool never writes to an assumed one.
+func (t *flashTool) chipArgs() ([]string, error) {
+	if t.chip == "" {
+		return nil, errors.New("the board must be checked before its flash is used")
+	}
+	return []string{"--chip", t.chip}, nil
 }
 
 func (t *flashTool) Read(ctx context.Context, port string, offset, size int64) ([]byte, error) {
@@ -520,7 +559,11 @@ func (t *flashTool) Read(ctx context.Context, port string, offset, size int64) (
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, "--chip", "esp32", "read-flash", "--no-progress", fmt.Sprintf("0x%x", offset), fmt.Sprintf("0x%x", size), filename)
+	chip, err := t.chipArgs()
+	if err != nil {
+		return nil, err
+	}
+	args = slices.Concat(args, chip, []string{"read-flash", "--no-progress", fmt.Sprintf("0x%x", offset), fmt.Sprintf("0x%x", size), filename})
 	if _, err := t.run(ctx, 90*time.Second, args...); err != nil {
 		return nil, err
 	}
@@ -555,7 +598,11 @@ func (t *flashTool) Write(ctx context.Context, port string, images []flashWriteI
 	if err != nil {
 		return err
 	}
-	args = append(args, "--chip", "esp32")
+	chip, err := t.chipArgs()
+	if err != nil {
+		return err
+	}
+	args = append(args, chip...)
 	// Explicit baseline options prevent host esptool configuration from changing
 	// image headers. Individual files leave intervening NVS sectors untouched.
 	options := []string{"--flash-mode", "dio", "--flash-freq", "40m", "--flash-size", "4MB"}
@@ -573,8 +620,12 @@ func (t *flashTool) EraseSettings(ctx context.Context, port string) error {
 	if err != nil {
 		return err
 	}
+	chip, err := t.chipArgs()
+	if err != nil {
+		return err
+	}
 	// Only first installs explicitly approved by the caller use this operation.
-	args = append(args, "--chip", "esp32", "erase-region", fmt.Sprintf("0x%x", nvsOffset), fmt.Sprintf("0x%x", nvsSize))
+	args = slices.Concat(args, chip, []string{"erase-region", fmt.Sprintf("0x%x", nvsOffset), fmt.Sprintf("0x%x", nvsSize)})
 	_, err = t.run(ctx, time.Minute, args...)
 	return err
 }

@@ -9,26 +9,34 @@ The CLI and firmware share a major version, which is the protocol they speak:
 Pipkin 2.x installs and talks to display firmware 2.x. If the latest firmware has
 a newer major version, `pipkin flash` asks you to run `pipkin update` first.
 
-## Supported board
+## Supported boards
 
-The current firmware supports **ESP32 CYD 2.8-inch touch boards with 4 MB
-flash**, including equivalently wired ESP32-S and WROOM versions; the printed
-model label doesn't need to match. It has been tested on a physical CYD board on
-macOS: first installation, updates that keep settings, USB reset, and the screen
-and touch. What matters is the board's wiring and its display and touch parts,
-not the seller's product name. Compare yours with the
-[board profile](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profile).
+The firmware supports two boards:
 
-Pipkin can check the ESP32 chip and its flash, but not which screen is attached,
-so make sure it's a CYD 2.8-inch touch board before flashing. If the display's
-firmware doesn't respond, Pipkin looks for a Pipkin version stored on the board
-and shows it as "installed but not responding", or "too old for this version of
-Pipkin" for firmware from before 2.0. Either way it's offered as an update that
-keeps your settings. Otherwise the board is treated as a new install.
+| Board | Screen | Chip and flash |
+| --- | --- | --- |
+| ESP32 CYD (ESP32-2432S028R) | 2.8-inch, 320 × 240, resistive touch | ESP32, 4 MB |
+| LCDWIKI ES3C40P | 4-inch IPS, 480 × 320, capacitive touch | ESP32-S3, 16 MB |
+
+The CYD includes equivalently wired ESP32-S and WROOM versions; the printed model
+label doesn't need to match. What matters is the board's wiring and its display
+and touch parts, not the seller's product name. Compare yours with the
+[board profiles](https://github.com/damian-w/pipkin/blob/main/docs/development.md#board-profiles).
+The CYD has been tested on a physical board on macOS: first installation, updates
+that keep settings, USB reset, and the screen and touch. The ES3C40P has been
+installed and updated on macOS. The 4-inch board needs Pipkin 2.1 or later.
+
+A display running Pipkin reports its board. Otherwise Pipkin tells the boards
+apart by their chip, ESP32 or ESP32-S3, and checks the flash size, but it can't
+see the screen itself, so make sure the board is one of these before flashing. If
+the display's firmware doesn't respond, Pipkin looks for a Pipkin version stored
+on the board and shows it as "installed but not responding", or "too old for this
+version of Pipkin" for firmware from before 2.0. Either way it's offered as an
+update that keeps your settings. Otherwise the board is treated as a new install.
 
 ## Flash a release
 
-Use a USB data cable, connect one supported board, and open a terminal:
+Use a USB data cable, connect your display, and open a terminal:
 
 ```sh
 pipkin flash
@@ -43,7 +51,7 @@ when available, and the board's ESP chip and flash. These checks may briefly res
 the display. It then shows the board, current firmware, target version and whether
 the action (install, update, reinstall or downgrade), and asks for yes/no confirmation.
 A first installation also names the board and port and warns that the board's
-current firmware and settings will be replaced, so check that it really is a CYD
+current firmware and settings will be replaced, so check that it really is that
 board before confirming.
 
 Only `y` or `yes` confirms. Anything else, end of input or Ctrl-C writes nothing.
@@ -54,15 +62,6 @@ The CLI pauses a running helper while using the USB port and restores it afterwa
 including when you decline or a step fails. A helper that was already stopped stays
 stopped. Flashing verifies the written images, reboots the display and checks that
 the expected Pipkin firmware responds before reporting success.
-
-If several candidate ports are connected, specify the board's port:
-
-```sh
-pipkin flash --port PORT
-```
-
-Replace `PORT` with its serial port, such as `COM9`, `/dev/ttyUSB0` or
-`/dev/cu.usbserial-110`. Selecting a port does not bypass board checks.
 
 To choose a specific stable firmware release:
 
@@ -83,6 +82,31 @@ pipkin flash --reinstall
 
 `--reinstall` allows writing the same version again; it does not skip confirmation
 or compatibility checks. It can be combined with `--port` and `--version`.
+
+### Several displays
+
+With more than one display connected, `pipkin flash` asks each one which board it
+is and which Pipkin version it runs, then lists them and asks which to flash:
+
+```text
+  1. 2.8-inch CYD, Pipkin 2.0.1 (/dev/cu.usbserial-2010)
+  2. 4-inch ES3C40P, Pipkin 2.0.1 (/dev/cu.usbmodem202201)
+Which display should Pipkin flash? [1-2, Enter cancels]
+```
+
+A board without Pipkin is listed by its port, and its chip is checked once you
+choose it. Flash one display at a time; run the command again for the next. To
+skip the question, name the display's serial port:
+
+```sh
+pipkin flash --port PORT
+```
+
+Replace `PORT` with its serial port, such as `COM9`, `/dev/ttyUSB0` or
+`/dev/cu.usbserial-110`. Selecting a port does not bypass board checks.
+
+The helper drives one display at a time. With two connected, it uses the one it
+last used and the other waits for your computer.
 
 ## Settings and recovery
 
@@ -126,7 +150,7 @@ cache checks and the tool's third-party notices.
 
 Pipkin runs on macOS, Linux and Windows, on both Intel/AMD and ARM. On Windows ARM,
 flashing runs the official Intel/AMD tool through Windows 11's emulation. Flashing
-has been tested with a physical board on macOS; the other systems haven't been
+has been tested with both physical boards on macOS; the other systems haven't been
 yet.
 
 Building and flashing your own firmware with ESP-IDF remains available in the

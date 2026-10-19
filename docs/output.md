@@ -53,7 +53,9 @@ version. Providers are keyed as `codex` and `claude` and can appear independentl
 | `updated` | Unix seconds, always | Collection start time for fresh usage; last changed snapshot time for the helper. |
 | `tasks` | Task snapshot; omitted before the first check and in fresh usage | See [tasks](#tasks). Independent of allowance availability. |
 
-A connected `device` contains string fields `port` and `firmware`. A failed
+A connected `device` contains string fields `port`, `firmware` and `board`, the
+display's board as its firmware reports it: `esp32-2432s028r` for the 2.8-inch
+CYD or `es3c40p` for the 4-inch ES3C40P. A failed
 port-open attempt can supply `error`. `{}` means no recorded connection or error;
 null means USB was not inspected. A cached connection is last known, especially
 when `pid` is zero. It does not indicate provider availability.
@@ -301,7 +303,7 @@ time remains unchanged; Claude's old quota is cleared. If the helper stops,
   "schema_version": 1,
   "version": "2.0.0",
   "pid": 4321,
-  "device": {"port": "COM9", "firmware": "2.0.0"},
+  "device": {"port": "COM9", "firmware": "2.1.0", "board": "esp32-2432s028r"},
   "states": {"codex": "unavailable", "claude": "signed_out"},
   "readings": {
     "codex": {

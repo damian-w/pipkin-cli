@@ -88,9 +88,13 @@ func writeStatus(out io.Writer, view statusView, now int64, goos string) error {
 	lines := lineOutput{w: out}
 	device := view.snapshot.Device
 	if device["port"] != "" {
-		message := "Pipkin is running. Display connected."
+		display := "Display"
+		if board, ok := boardByID(device["board"]); ok {
+			display = board.Screen + " display"
+		}
+		message := "Pipkin is running. " + display + " connected."
 		if firmware := device["firmware"]; firmware != "" {
-			message = "Pipkin is running. Display connected (firmware " + firmware + ")."
+			message = "Pipkin is running. " + display + " connected (firmware " + firmware + ")."
 		}
 		lines.line("", message)
 	} else {

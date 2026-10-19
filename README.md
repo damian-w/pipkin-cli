@@ -18,7 +18,8 @@ into and no API key to find.
 
 ## What you need
 
-- A Pipkin display, either a kit or one you've built from a CYD board.
+- A Pipkin display, either a kit or one you've built from a 2.8-inch CYD or 4-inch
+  ES3C40P board.
 - A USB **data** cable. Some cables only carry power and won't work.
 - A Mac, Windows PC or Linux computer.
 - The Claude desktop app, the Codex app, or both, signed in.

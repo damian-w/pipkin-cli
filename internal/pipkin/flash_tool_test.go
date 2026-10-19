@@ -30,7 +30,7 @@ func TestFlashProbeRequiresCompleteClassicESP32(t *testing.T) {
 			t.Fatalf("%s: %+v, %v", description, probe, err)
 		}
 		for _, malformed := range []string{
-			strings.Replace(data, "Connected to ESP32 on", "Connected to ESP32-S3 on", 1),
+			strings.Replace(data, "Connected to ESP32 on", "Connected to ESP32-C3 on", 1),
 			strings.Replace(data, "Detected flash size: 4MB\n", "", 1),
 			strings.Replace(data, "Detected flash size: 4MB", "Detected flash size: Unknown", 1),
 			data + "MAC: aa:bb:cc:dd:ee:ff\n",
@@ -40,6 +40,37 @@ func TestFlashProbeRequiresCompleteClassicESP32(t *testing.T) {
 			if _, err := parseFlashProbe([]byte(malformed)); err == nil {
 				t.Fatalf("accepted incomplete/ambiguous device: %q", malformed)
 			}
+		}
+	}
+}
+
+func TestFlashProbeNamesTheESP32S3Board(t *testing.T) {
+	data := "Connected to ESP32-S3 on /dev/cu.usbmodem101:\nChip type:          ESP32-S3 (QFN56) (revision v0.2)\nMAC:                7c:e8:b1:b1:6e:b8\nDetected flash size: 16MB\n"
+	probe, err := parseFlashProbe([]byte(data))
+	if err != nil || probe.Chip != "esp32s3" || probe.FlashBytes != 16<<20 || probe.MAC != "7c:e8:b1:b1:6e:b8" {
+		t.Fatalf("%+v, %v", probe, err)
+	}
+	if board, ok := boardByChip(probe.Chip); !ok || board.ID != "es3c40p" {
+		t.Fatal(board, ok)
+	}
+}
+
+func TestFlashSecurityInfoParserFailsClosed(t *testing.T) {
+	disabled := "Chip ID: 9\nSecure Boot: Disabled\nFlash Encryption: Disabled\n"
+	if secure, err := parseToolSecurity([]byte(disabled)); err != nil || secure {
+		t.Fatal(secure, err)
+	}
+	for _, data := range []string{
+		strings.Replace(disabled, "Secure Boot: Disabled", "Secure Boot: Enabled", 1),
+		strings.Replace(disabled, "Flash Encryption: Disabled", "Flash Encryption: Enabled", 1),
+	} {
+		if secure, err := parseToolSecurity([]byte(data)); err != nil || !secure {
+			t.Fatalf("secured board passed: %q", data)
+		}
+	}
+	for _, data := range []string{"", "Secure Boot: Disabled\n", disabled + "Flash Encryption: Disabled\n", strings.Replace(disabled, "Disabled\nFlash", "Unknown\nFlash", 1)} {
+		if _, err := parseToolSecurity([]byte(data)); err == nil {
+			t.Fatalf("accepted %q", data)
 		}
 	}
 }
@@ -350,6 +381,47 @@ func TestFlashToolSubprocessBackend(t *testing.T) {
 	if runtime.GOOS != "windows" && !strings.Contains(string(calls), "--before|default-reset|--after|hard-reset") {
 		t.Fatal("post-flash reset must release DTR through the standard reset sequence before booting the application")
 	}
+	// An ESP32-S3 is checked with get-security-info, and later commands name its chip.
+	t.Setenv("PIPKIN_TOOL_TEST_CHIP", "esp32s3")
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	probe, err = tool.Probe(context.Background(), "COM8")
+	if err != nil || probe.Chip != "esp32s3" || probe.FlashBytes != 16<<20 || probe.Secure {
+		t.Fatalf("ESP32-S3 probe = %+v, %v", probe, err)
+	}
+	t.Setenv("PIPKIN_TOOL_TEST_SECURE", "yes")
+	if probe, err = tool.Probe(context.Background(), "COM8"); err != nil || !probe.Secure {
+		t.Fatalf("encrypted ESP32-S3 probe = %+v, %v", probe, err)
+	}
+	t.Setenv("PIPKIN_TOOL_TEST_SECURE", "")
+	if _, err := tool.Read(context.Background(), "COM8", 0x8000, 0x1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := tool.Write(context.Background(), "COM8", []flashWriteImage{{Path: image, Offset: 0}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tool.EraseSettings(context.Background(), "COM8"); err != nil {
+		t.Fatal(err)
+	}
+	calls, err = os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		if strings.Contains(line, "read-mem") || strings.Contains(line, "|esp32|") ||
+			(strings.Contains(line, "flash|") || strings.Contains(line, "erase-region")) && !strings.Contains(line, "--chip|esp32s3|") {
+			t.Fatalf("ESP32-S3 command used the classic ESP32's checks or chip: %s", line)
+		}
+	}
+	if !strings.Contains(string(calls), "get-security-info") {
+		t.Fatal("ESP32-S3 security was not checked")
+	}
+	t.Setenv("PIPKIN_TOOL_TEST_CHIP", "")
+	if _, err := (&flashTool{path: binary, output: io.Discard}).Read(context.Background(), "COM8", 0x8000, 0x1000); err == nil {
+		t.Fatal("read the flash of a board that was never probed")
+	}
+
 	t.Setenv("ESPTOOL_CHIP", "esp8266")
 	t.Setenv("ESPTOOL_CFGFILE", "untrusted")
 	data, err = tool.run(context.Background(), time.Second, "environment")

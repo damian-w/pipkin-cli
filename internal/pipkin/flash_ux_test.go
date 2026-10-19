@@ -290,12 +290,21 @@ func TestFlashPlansAndProgressArePlainAndSpecific(t *testing.T) {
 	for _, action := range []string{"Install", "Update", "Reinstall", "Downgrade"} {
 		t.Run(action, func(t *testing.T) {
 			var output bytes.Buffer
-			prompt, err := writeFlashPlan(&output, flashPlan{action: action, installed: "2.0.0", selected: "2.0.1", port: "TESTPORT"})
+			prompt, err := writeFlashPlan(&output, flashPlan{action: action, installed: "2.0.0", selected: "2.0.1", port: "TESTPORT", board: displayBoards[0]})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if strings.Contains(prompt, "Confirm this is a CYD") != (action == "Install") || strings.Contains(output.String(), "Your settings are kept") != (action != "Install") {
 				t.Fatal(output.String(), prompt)
+			}
+			if action == "Install" && !strings.Contains(output.String(), "Board: 2.8-inch CYD touch display") {
+				t.Fatal(output.String())
+			}
+			large, _ := boardByID("es3c40p")
+			output.Reset()
+			prompt, err = writeFlashPlan(&output, flashPlan{action: action, installed: "2.0.0", selected: "2.0.1", port: "TESTPORT", board: large})
+			if err != nil || strings.Contains(prompt, "Confirm this is an ES3C40P") != (action == "Install") || !strings.Contains(output.String(), "4-inch") {
+				t.Fatal(output.String(), prompt, err)
 			}
 			for _, line := range strings.Split(output.String(), "\n") {
 				if len(line) >= 80 || strings.IndexFunc(line, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {

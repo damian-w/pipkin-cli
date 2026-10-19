@@ -189,7 +189,7 @@ func (h *Helper) connectPorts(ctx context.Context, ports []string, open func(str
 			return
 		}
 		h.conn = conn
-		h.device = map[string]string{"port": name, "firmware": identity["firmware"]}
+		h.device = map[string]string{"port": name, "firmware": identity["firmware"], "board": identity["board"]}
 		if h.config.LastPort != name {
 			config, err := updateConfig(func(config *Config) error {
 				config.LastPort = name

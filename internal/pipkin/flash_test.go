@@ -34,7 +34,11 @@ func testFirmwareRelease(t *testing.T, firmwareVersion string) *firmwareRelease 
 		}
 		m.Images = append(m.Images, image)
 	}
-	return &firmwareRelease{Manifest: m, Folder: folder, Tag: "v" + firmwareVersion}
+	if err := os.WriteFile(filepath.Join(folder, demoFirmwareFile), []byte("demo reel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return &firmwareRelease{Manifest: m, Folder: folder, Tag: "v" + firmwareVersion,
+		boards: map[string]firmwareManifest{firmwareBoard: m}}
 }
 
 func testFlashIdentity(firmwareVersion string) map[string]string {
@@ -186,7 +190,7 @@ func TestFlashFirstInstallAndUpdate(t *testing.T) {
 			if strings.Contains(f.output.String(), "Confirm this is a CYD") == update || !strings.Contains(f.output.String(), "2.0.1 is running") {
 				t.Fatal(f.output.String())
 			}
-			if update && (!strings.Contains(f.output.String(), "Ready to update your display from Pipkin 2.0.0 to 2.0.1.") || !strings.Contains(f.output.String(), "Update now?")) {
+			if update && (!strings.Contains(f.output.String(), "Ready to update your 2.8-inch display from Pipkin 2.0.0 to 2.0.1.") || !strings.Contains(f.output.String(), "Update now?")) {
 				t.Fatal(f.output.String())
 			}
 			if strings.Contains(f.output.String(), "Finishing the firmware write") {
@@ -490,12 +494,11 @@ func TestFlashCLIOptionsAndAmbiguousPorts(t *testing.T) {
 	if err != nil || options.Port != "COM3" || options.Version != "1.0.0" || !options.Reinstall || !options.Demo {
 		t.Fatal(options, err)
 	}
-	for _, candidates := range [][]string{nil, {"one", "two"}} {
-		if _, err := selectFlashPort("", candidates); err == nil {
-			t.Fatal("ambiguous/missing port accepted")
-		}
+	session := &boardSession{}
+	if _, err := session.chooseFlashPort(context.Background(), "", nil, strings.NewReader(""), io.Discard); err == nil {
+		t.Fatal("missing port accepted")
 	}
-	if port, err := selectFlashPort("chosen", []string{"one", "two"}); err != nil || port != "chosen" {
+	if port, err := session.chooseFlashPort(context.Background(), "chosen", []string{"one", "two"}, strings.NewReader(""), io.Discard); err != nil || port != "chosen" {
 		t.Fatal(port, err)
 	}
 	var argsSeen []string

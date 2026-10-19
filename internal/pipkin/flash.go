@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -134,7 +135,7 @@ type boardSession struct {
 	installation, maintenance *os.File
 	port                      string
 	reset                     func(context.Context, string) error // set once ROM probing may reset the board
-	restoreHelper             bool
+	paused, restoreHelper     bool
 }
 
 func openBoardSession(actions boardActions) (*boardSession, error) {
@@ -150,17 +151,29 @@ func openBoardSession(actions boardActions) (*boardSession, error) {
 	return &boardSession{boardActions: actions, installation: installation, maintenance: maintenance}, nil
 }
 
-// claimPort pauses a running helper, then reads the identity of any responding Pipkin.
-func (s *boardSession) claimPort(ctx context.Context) (map[string]string, error) {
+// pause stops a running helper, which holds a display's port, until close.
+func (s *boardSession) pause() error {
+	if s.paused {
+		return nil
+	}
 	running, err := s.running()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if running {
 		s.restoreHelper = true // A failed stop may already have interrupted service.
 		if err := s.stop(); err != nil {
-			return nil, fmt.Errorf("could not release the display connection: %w", err)
+			return fmt.Errorf("could not release the display connection: %w", err)
 		}
+	}
+	s.paused = true
+	return nil
+}
+
+// claimPort pauses a running helper, then reads the identity of any responding Pipkin.
+func (s *boardSession) claimPort(ctx context.Context) (map[string]string, error) {
+	if err := s.pause(); err != nil {
+		return nil, err
 	}
 	identity, err := s.identity(ctx, s.port, 3500*time.Millisecond)
 	if err != nil {
@@ -221,7 +234,19 @@ func readFlashIdentity(ctx context.Context, name string, timeout time.Duration) 
 	return identify(ctx, &connection{port: port, name: name}, timeout), ctx.Err()
 }
 
-func selectFlashPort(explicit string, candidates []string) (string, error) {
+// flashChoice is a connected display and the identity of the Pipkin running there
+// (nil for none) when the picker asked it.
+type flashChoice struct {
+	port     string
+	identity map[string]string
+}
+
+// chooseFlashPort returns the port to flash. With several boards connected, it pauses
+// the helper, asks each which display it is and has the user pick one; an empty port
+// means they cancelled. The chosen display is asked again just before it's checked,
+// as with a single display: a CYD's USB bridge can miss the bootloader's reply when
+// its port sits idle in between.
+func (s *boardSession) chooseFlashPort(ctx context.Context, explicit string, candidates []string, input io.Reader, output io.Writer) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
@@ -230,16 +255,67 @@ func selectFlashPort(explicit string, candidates []string) (string, error) {
 		return "", errors.New("no display found; connect it with a USB data cable, or choose a port with --port PORT")
 	case 1:
 		return candidates[0], nil
-	default:
-		var ports []string
-		for _, port := range candidates {
-			ports = append(ports, terminalText(port))
-		}
-		var message bytes.Buffer
-		_ = writeOutputLine(&message, "", "Several USB serial boards are connected ("+strings.Join(ports, ", ")+").")
-		_ = writeOutputLine(&message, "", "Unplug the others, or run 'pipkin flash --port PORT' to choose one.")
-		return "", errors.New(strings.TrimSuffix(message.String(), "\n"))
 	}
+	if err := s.pause(); err != nil {
+		return "", err
+	}
+	if err := writeOutputLine(output, "", "Several displays are connected. Checking each one..."); err != nil {
+		return "", err
+	}
+	choices := make([]flashChoice, len(candidates))
+	failed := make([]bool, len(candidates))
+	var wait sync.WaitGroup
+	for i, port := range candidates {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			identity, err := s.identity(ctx, port, 3500*time.Millisecond)
+			choices[i], failed[i] = flashChoice{port: port, identity: identity}, err != nil
+		}()
+	}
+	wait.Wait()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	lines := lineOutput{w: output}
+	lines.line("", "")
+	for i, choice := range choices {
+		lines.printf("  %d. %s (%s)\n", i+1, describeFlashChoice(choice, failed[i]), terminalText(choice.port))
+	}
+	if lines.err != nil {
+		return "", lines.err
+	}
+	answer, err := askFlashQuestion(ctx, input, output, fmt.Sprintf("Which display should Pipkin flash? [1-%d, Enter cancels] ", len(choices)))
+	if err != nil {
+		return "", err
+	}
+	if number, err := strconv.Atoi(answer); err == nil && number >= 1 && number <= len(choices) {
+		return choices[number-1].port, nil
+	}
+	return "", nil
+}
+
+func describeFlashChoice(choice flashChoice, failed bool) string {
+	switch {
+	case failed:
+		return "Couldn't open its port"
+	case choice.identity == nil:
+		return "No Pipkin running; its board is checked next"
+	}
+	name := "Unsupported display"
+	if board, ok := boardByID(choice.identity["board"]); ok {
+		name = board.Name
+	}
+	return name + ", Pipkin " + terminalText(strings.TrimPrefix(choice.identity["firmware"], "v"))
+}
+
+// flashIdentityBoard returns the board a responding Pipkin reports.
+func flashIdentityBoard(identity map[string]string) (displayBoard, error) {
+	board, ok := boardByID(identity["board"])
+	if !isIdentity(identity) || identity["firmware"] == "" || !ok {
+		return board, errors.New("connected Pipkin reports an unsupported or incomplete board identity; no firmware was written")
+	}
+	return board, nil
 }
 
 func validateFlashIdentity(identity map[string]string, manifest firmwareManifest) error {
@@ -252,9 +328,10 @@ func validateFlashIdentity(identity map[string]string, manifest firmwareManifest
 	return nil
 }
 
-func validateFlashProbe(probe flashProbe) error {
-	if probe.Chip != "esp32" || probe.FlashBytes != baselineFlashBytes || probe.MAC == "" {
-		return errors.New("connected board does not match the required ESP32 with 4 MB flash; no firmware was written")
+func validateFlashProbe(probe flashProbe, board displayBoard) error {
+	if probe.Chip != board.Chip || probe.FlashBytes != board.FlashBytes || probe.MAC == "" {
+		return fmt.Errorf("connected board does not match the %s (%s with %d MB flash); no firmware was written",
+			board.Name, board.ChipName, board.FlashBytes>>20)
 	}
 	if probe.Secure {
 		return errors.New("secure boot or flash encryption is enabled; this board cannot use the standard firmware images")
@@ -301,9 +378,12 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return err
 	}
-	port, err := selectFlashPort(options.Port, actions.ports())
+	port, err := session.chooseFlashPort(ctx, options.Port, actions.ports(), input, output)
 	if err != nil {
 		return err
+	}
+	if port == "" {
+		return writeOutputLine(output, "", "Cancelled. No firmware was written.")
 	}
 	session.port = port
 	if err := writeOutputLine(output, "", "Checking the firmware release..."); err != nil {
@@ -319,9 +399,9 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err := validateFirmwareManifest(release.Manifest, release.Tag); err != nil {
 		return err
 	}
-	target, application := release.Manifest.Version, ""
+	target := release.Manifest.Version
 	if options.Demo {
-		target, application = release.Manifest.Version+demoFirmwareSuffix, demoFirmwareFile
+		target += demoFirmwareSuffix
 	}
 	tool, err := actions.prepare(ctx, output)
 	if err != nil {
@@ -330,6 +410,16 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	identity, err := session.claimPort(ctx)
 	if err != nil {
 		return err
+	}
+	// A responding Pipkin names its board. Otherwise the probed chip decides it below.
+	var board displayBoard
+	if identity != nil {
+		if board, err = flashIdentityBoard(identity); err != nil {
+			return err
+		}
+		if err := release.selectBoard(board); err != nil {
+			return err
+		}
 	}
 	if err := validateFlashIdentity(identity, release.Manifest); err != nil {
 		return err
@@ -355,8 +445,21 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return fmt.Errorf("could not check the ESP32 bootloader (close other serial tools, or hold BOOT while connecting): %w", err)
 	}
-	if err := validateFlashProbe(probe); err != nil {
+	if identity == nil {
+		board, _ = boardByChip(probe.Chip)
+		if err := release.selectBoard(board); err != nil {
+			return err
+		}
+	}
+	if err := validateFlashProbe(probe, board); err != nil {
 		return err
+	}
+	application := ""
+	if options.Demo {
+		application = board.demoFile()
+		if _, err := os.Stat(filepath.Join(release.Folder, application)); err != nil {
+			return fmt.Errorf("firmware %s has no demo reel for the %s display", release.Tag, board.Name)
+		}
 	}
 	partition, partitionPath := release.image("partition-table")
 	expectedTable, err := os.ReadFile(partitionPath)
@@ -378,7 +481,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 			return fmt.Errorf("could not inspect existing firmware: %w", err)
 		}
 		var storedVersion string
-		storedVersion, updating = readPipkinFirmwareVersion(prefix)
+		storedVersion, updating = readPipkinFirmwareVersion(prefix, board.ChipID)
 		if updating {
 			stored = true
 			installed = strings.TrimPrefix(storedVersion, "v")
@@ -403,7 +506,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 		}
 	}
 	prompt, err := writeFlashPlan(output, flashPlan{action: action, installed: installed, selected: target,
-		port: port, stored: stored})
+		port: port, stored: stored, board: board})
 	if err != nil {
 		return err
 	}
@@ -423,7 +526,7 @@ func runFlash(ctx context.Context, options flashOptions, input io.Reader, output
 	if err != nil {
 		return err
 	}
-	if err := validateFlashProbe(confirmedProbe); err != nil {
+	if err := validateFlashProbe(confirmedProbe, board); err != nil {
 		return err
 	}
 	if confirmedProbe.MAC != probe.MAC {
@@ -500,16 +603,22 @@ func flashCancellationRemainder(err, cancelled error) error {
 	}
 }
 
-func confirmFlashPrompt(ctx context.Context, input io.Reader, output io.Writer, prompt string) (confirmed bool, result error) {
+func confirmFlashPrompt(ctx context.Context, input io.Reader, output io.Writer, prompt string) (bool, error) {
+	answer, err := askFlashQuestion(ctx, input, output, prompt)
+	return err == nil && (answer == "y" || answer == "yes"), err
+}
+
+// askFlashQuestion returns one trimmed, lower-case line of input, or "" at its end.
+func askFlashQuestion(ctx context.Context, input io.Reader, output io.Writer, prompt string) (_ string, result error) {
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return "", err
 	}
 	n, err := io.WriteString(output, prompt)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if n != len(prompt) {
-		return false, io.ErrShortWrite
+		return "", io.ErrShortWrite
 	}
 	defer func() { result = errors.Join(result, writeOutputLine(output, "", "")) }()
 	type answer struct {
@@ -518,26 +627,42 @@ func confirmFlashPrompt(ctx context.Context, input io.Reader, output io.Writer, 
 	}
 	answers := make(chan answer, 1)
 	go func() {
-		// An overlong line is rejected, not partially interpreted as consent.
-		reader := bufio.NewReaderSize(input, 64)
-		line, err := reader.ReadSlice('\n')
-		answers <- answer{string(line), err}
+		line, err := readAnswerLine(input)
+		answers <- answer{line, err}
 	}()
 	select {
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return "", ctx.Err()
 	case response := <-answers:
 		if errors.Is(response.err, io.EOF) {
-			return false, nil
+			return "", nil
 		}
 		if response.err != nil {
-			return false, response.err
+			return "", response.err
 		}
-		switch strings.ToLower(strings.TrimSpace(response.line)) {
-		case "y", "yes":
-			return true, nil
-		default:
-			return false, nil
+		return strings.ToLower(strings.TrimSpace(response.line)), nil
+	}
+}
+
+// readAnswerLine reads up to a newline a byte at a time, so a later question gets
+// the next line. An overlong line is rejected, not partially interpreted as consent.
+func readAnswerLine(input io.Reader) (string, error) {
+	var line []byte
+	var b [1]byte
+	for {
+		n, err := input.Read(b[:])
+		if n == 1 {
+			if b[0] == '\n' {
+				return string(line), nil
+			}
+			if len(line) == 63 {
+				return "", bufio.ErrBufferFull
+			}
+			line = append(line, b[0])
+			continue
+		}
+		if err != nil {
+			return "", err
 		}
 	}
 }
@@ -592,20 +717,21 @@ func flashCancellationNotice(ctx context.Context, output io.Writer) func() {
 type flashPlan struct {
 	action, installed, selected, port string
 	stored                            bool
+	board                             displayBoard
 }
 
 func writeFlashPlan(output io.Writer, plan flashPlan) (string, error) {
 	var heading, prompt string
 	switch plan.action {
 	case "Update", "Downgrade":
-		heading = fmt.Sprintf("Ready to %s your display from Pipkin %s to %s.", strings.ToLower(plan.action), plan.installed, plan.selected)
+		heading = fmt.Sprintf("Ready to %s your %s display from Pipkin %s to %s.", strings.ToLower(plan.action), plan.board.Screen, plan.installed, plan.selected)
 		prompt = plan.action + " now? [y/N] "
 	case "Reinstall":
-		heading = "Ready to reinstall Pipkin " + plan.selected + " on your display."
+		heading = "Ready to reinstall Pipkin " + plan.selected + " on your " + plan.board.Screen + " display."
 		prompt = "Reinstall now? [y/N] "
 	default:
 		heading = "Ready to install Pipkin " + plan.selected + "."
-		prompt = "Confirm this is a CYD and install Pipkin? [y/N] "
+		prompt = "Confirm this is " + plan.board.Called + " and install Pipkin? [y/N] "
 	}
 	lines := lineOutput{w: output}
 	lines.line("", "")
@@ -621,7 +747,7 @@ func writeFlashPlan(output io.Writer, plan flashPlan) (string, error) {
 		lines.line("", "Your settings are kept.")
 		return prompt, lines.err
 	}
-	lines.line("", "Board: CYD, 2.8-inch touch display")
+	lines.line("", "Board: "+plan.board.Name+" touch display")
 	lines.line("", "Port: "+plan.port)
 	lines.line("", "This replaces the board's current firmware and settings.")
 	return prompt, lines.err

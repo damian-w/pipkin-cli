@@ -154,6 +154,12 @@ func TestStatusVerifiedRunningReadsOnlyMatchingCachedSnapshot(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("reading status changed its saved JSON")
 	}
+	// Firmware that names its board says which display is connected.
+	out.Reset()
+	view.snapshot.Device["board"] = "es3c40p"
+	if err := writeStatus(&out, view, testNow, "darwin"); err != nil || !strings.Contains(out.String(), "Pipkin is running. 4-inch display connected (firmware 9.8.7).") {
+		t.Fatal(out.String(), err)
+	}
 	for _, path := range []string{configPath(), filepath.Join(appDir(), "config.lock"), logPath()} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("status unexpectedly created %s", filepath.Base(path))

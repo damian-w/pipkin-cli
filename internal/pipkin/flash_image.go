@@ -16,19 +16,23 @@ func validateFirmwareImage(image firmwareImage, data []byte, manifest firmwareMa
 	if int64(len(data)) != image.Size {
 		return fmt.Errorf("%s: image size differs from the manifest", image.File)
 	}
+	board, ok := boardByID(manifest.Board)
+	if !ok {
+		return fmt.Errorf("%s: unsupported board", image.File)
+	}
 	var err error
 	switch image.Role {
 	case "partition-table":
 		err = validateFirmwarePartitions(data)
 	case "bootloader", "application":
-		maximum := bootloaderMaxSize
+		maximum := board.BootloaderMaxSize
 		if image.Role == "application" {
 			maximum = applicationMaxSize
 		}
-		if len(data) > maximum {
+		if int64(len(data)) > maximum {
 			err = errors.New("image exceeds the initial flash region")
 		} else {
-			err = validateESP32Image(data)
+			err = validateESP32Image(data, board.ChipID)
 		}
 		if err == nil && image.Role == "application" {
 			err = validatePipkinApplication(data, manifest)
@@ -42,15 +46,16 @@ func validateFirmwareImage(image firmwareImage, data []byte, manifest firmwareMa
 	return nil
 }
 
-func validateESP32Image(data []byte) error {
+// validateESP32Image checks an image for the given header chip ID.
+func validateESP32Image(data []byte, chipID uint16) error {
 	if len(data) < 24 || data[0] != 0xe9 || data[1] < 1 || data[1] > 16 {
 		return errors.New("invalid ESP image header")
 	}
 	if data[2] != 2 || data[3] != 0x20 {
 		return errors.New("image must use DIO, 40 MHz and 4 MB flash")
 	}
-	if binary.LittleEndian.Uint16(data[12:14]) != 0 {
-		return errors.New("image does not target the classic ESP32")
+	if binary.LittleEndian.Uint16(data[12:14]) != chipID {
+		return errors.New("image is for another ESP chip")
 	}
 	if data[23] != 1 {
 		return errors.New("image is missing its appended SHA-256 digest")
@@ -99,10 +104,11 @@ func firmwareCString(data []byte) (string, bool) {
 }
 
 // readPipkinFirmwareVersion recognizes the ESP-IDF application description in a
-// read-only flash prefix. It identifies stored firmware, not a running app, and
-// does not replace whole-image verification or the existing-layout check.
-func readPipkinFirmwareVersion(data []byte) (string, bool) {
-	if len(data) < 288 || data[0] != 0xe9 || data[1] < 1 || data[1] > 16 || binary.LittleEndian.Uint16(data[12:14]) != 0 ||
+// read-only flash prefix, for the given header chip ID. It identifies stored
+// firmware, not a running app, and does not replace whole-image verification or
+// the existing-layout check.
+func readPipkinFirmwareVersion(data []byte, chipID uint16) (string, bool) {
+	if len(data) < 288 || data[0] != 0xe9 || data[1] < 1 || data[1] > 16 || binary.LittleEndian.Uint16(data[12:14]) != chipID ||
 		binary.LittleEndian.Uint32(data[28:32]) > applicationMaxSize {
 		return "", false
 	}

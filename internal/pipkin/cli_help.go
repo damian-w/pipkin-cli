@@ -47,8 +47,9 @@ Always Allow. Pipkin restarts afterwards if it's running.
 
 const flashHelp = `
 Downloads the latest firmware, checks your display and asks before writing.
-Updates keep your settings. Keep the USB cable plugged in until it finishes;
-Ctrl-C is safe until writing starts.
+Updates keep your settings. With several displays connected, it asks which one
+to flash. Keep the USB cable plugged in until it finishes; Ctrl-C is safe until
+writing starts.
 
   --reinstall        Write the same version again to repair a failed update
   --port PORT        Choose a port, e.g. /dev/cu.usbserial-110 or COM9

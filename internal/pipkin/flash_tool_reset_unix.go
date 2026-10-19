@@ -20,7 +20,11 @@ func (t *flashTool) Reset(ctx context.Context, port string) error {
 	if err != nil {
 		return err
 	}
-	args = append(args, "--chip", "esp32", "read-mac")
+	// Before a successful probe, esptool detects the chip itself.
+	if chip, err := t.chipArgs(); err == nil {
+		args = append(args, chip...)
+	}
+	args = append(args, "read-mac")
 	_, err = t.run(ctx, 20*time.Second, args...)
 	return err
 }

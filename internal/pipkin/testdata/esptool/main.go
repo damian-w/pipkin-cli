@@ -39,7 +39,18 @@ func main() {
 			fmt.Println("write-flash read-flash flash-id get-security-info")
 			return
 		case "flash-id":
+			if os.Getenv("PIPKIN_TOOL_TEST_CHIP") == "esp32s3" {
+				fmt.Println("Connected to ESP32-S3 on COM7:\nChip type:          ESP32-S3 (QFN56) (revision v0.2)\nMAC:                7c:e8:b1:b1:6e:b8\nDetected flash size: 16MB")
+				return
+			}
 			fmt.Println("Connected to ESP32 on COM7:\nChip type:           ESP32-D0WD-V3 (revision v3.1)\nMAC:                aa:bb:cc:dd:ee:ff\nDetected flash size: 4MB")
+			return
+		case "get-security-info":
+			state := "Disabled"
+			if os.Getenv("PIPKIN_TOOL_TEST_SECURE") != "" {
+				state = "Enabled"
+			}
+			fmt.Printf("Security Information:\nFlags: 0x00000000 (0b0)\nChip ID: 9\nSecure Boot: Disabled\nFlash Encryption: %s\n", state)
 			return
 		case "read-mem":
 			value := "00000000"
