@@ -98,11 +98,15 @@ func TestCodexTaskStateProjection(t *testing.T) {
 }
 
 func TestCodexTaskNativeCardsAndAcceptedReplies(t *testing.T) {
-	for _, kind := range []string{"unanswered", "user", "accepted", "unaccepted", "malformed"} {
+	for _, kind := range []string{"unanswered", "finished", "user", "accepted", "unaccepted", "malformed"} {
 		t.Run(kind, func(t *testing.T) {
-			snapshot := codexTestSnapshot("idle", "completed")
+			runtime, status := "active", "inProgress"
+			if kind == "finished" {
+				runtime, status = "idle", "completed"
+			}
+			snapshot := codexTestSnapshot(runtime, status)
 			items := []any{map[string]any{"type": "agentMessage", "id": "question", "questions": []any{map[string]any{"question": "private prompt"}}}}
-			if kind != "unanswered" {
+			if kind != "unanswered" && kind != "finished" {
 				identity := string(codexTestJSON(t, []any{"request_user_input_async", "question", 0}))
 				reply := map[string]any{"questionItemId": identity, "question": "private prompt", "answer": "private answer"}
 				if kind == "malformed" {
@@ -118,14 +122,17 @@ func TestCodexTaskNativeCardsAndAcceptedReplies(t *testing.T) {
 				}
 				items = append(items, item)
 			}
-			snapshot["turns"] = []any{map[string]any{"turnId": "current", "status": "completed", "items": items}}
+			snapshot["turns"] = []any{map[string]any{"turnId": "current", "status": status, "items": items}}
 			meta, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := "needs_attention"
-			if kind == "user" || kind == "accepted" {
+			switch kind {
+			case "finished":
 				want = "idle"
+			case "user", "accepted":
+				want = "working"
 			}
 			if meta.status() != want {
 				t.Fatalf("got %s, want %s", meta.status(), want)
@@ -141,14 +148,14 @@ func TestCodexTaskNativeCardsAndAcceptedReplies(t *testing.T) {
 	}
 }
 
-func codexTestCrossTurnReply(t *testing.T, kind string) map[string]any {
+func codexTestCardReply(t *testing.T, kind string) map[string]any {
 	t.Helper()
 	if kind == "unanswered" {
 		return map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "An independent follow-up"}}}
 	}
-	answerID := "older-question"
+	answerID := "current-question"
 	if kind == "wrong identity" {
-		answerID = "other-question"
+		answerID = "older-question"
 	}
 	rows := []any{}
 	for index := range 2 {
@@ -173,25 +180,38 @@ func codexTestCrossTurnReply(t *testing.T, kind string) map[string]any {
 	return map[string]any{"type": "userMessage", "content": content}
 }
 
-func codexTestCrossTurnSnapshot(t *testing.T, canonical bool, kind string) map[string]any {
+// An older finished turn holds an unanswered card, then the latest turn is
+// still running with its own card and a reply of the given kind.
+func codexTestCardSnapshot(t *testing.T, canonical bool, kind string) map[string]any {
 	t.Helper()
-	snapshot := codexTestSnapshot("idle", "completed")
-	older := map[string]any{"turnId": "older", "status": "completed", "items": []any{map[string]any{
-		"type": "agentMessage", "id": "older-question", "questions": []any{map[string]any{"title": "private first"}, map[string]any{"title": "private second"}},
-	}}}
-	latest := map[string]any{"turnId": "latest", "status": "completed", "items": []any{codexTestCrossTurnReply(t, kind)}}
+	snapshot := codexTestSnapshot("active", "inProgress")
+	card := func(id string) map[string]any {
+		return map[string]any{"type": "agentMessage", "id": id, "questions": []any{map[string]any{"title": "private first"}, map[string]any{"title": "private second"}}}
+	}
+	older := map[string]any{"turnId": "older", "status": "completed", "items": []any{card("older-question")}}
+	latest := map[string]any{"turnId": "latest", "status": "inProgress", "items": []any{card("current-question"), codexTestCardReply(t, kind)}}
 	snapshot["turns"] = []any{older, latest}
 	if canonical {
 		snapshot["turns"] = []any{map[string]any{"status": "failed", "items": []any{}}}
 		snapshot["turnHistory"] = map[string]any{"kind": "canonical", "history": map[string]any{
 			"islands":       []any{map[string]any{"newerBoundary": map[string]any{"status": "exhausted"}, "entries": []any{map[string]any{"value": "older"}, map[string]any{"value": "latest"}}}},
-			"entitiesByKey": map[string]any{"older": older, "latest": latest, "orphan": map[string]any{"status": "failed", "items": []any{map[string]any{"type": "agentMessage", "id": "orphan-question", "questions": []any{map[string]any{"title": "private orphan"}}}}}},
+			"entitiesByKey": map[string]any{"older": older, "latest": latest, "orphan": map[string]any{"status": "inProgress", "items": []any{card("orphan-question")}}},
 		}}
 	}
 	return snapshot
 }
 
-func TestCodexTaskCardsSpanTurnsAndUseAcceptedLaterReplies(t *testing.T) {
+func codexTestFinishLatestTurn(snapshot map[string]any) {
+	snapshot["threadRuntimeStatus"] = map[string]any{"type": "idle", "activeFlags": []string{}}
+	if history, ok := snapshot["turnHistory"].(map[string]any); ok {
+		history["history"].(map[string]any)["entitiesByKey"].(map[string]any)["latest"].(map[string]any)["status"] = "completed"
+		return
+	}
+	turns := snapshot["turns"].([]any)
+	turns[len(turns)-1].(map[string]any)["status"] = "completed"
+}
+
+func TestCodexTaskCardsCountOnlyInTheRunningTurn(t *testing.T) {
 	for _, canonical := range []bool{false, true} {
 		for _, kind := range []string{"unanswered", "user", "accepted", "unaccepted", "malformed", "wrong identity", "partial answer"} {
 			name := "legacy/" + kind
@@ -199,32 +219,30 @@ func TestCodexTaskCardsSpanTurnsAndUseAcceptedLaterReplies(t *testing.T) {
 				name = "canonical/" + kind
 			}
 			t.Run(name, func(t *testing.T) {
-				snapshot := codexTestCrossTurnSnapshot(t, canonical, kind)
+				snapshot := codexTestCardSnapshot(t, canonical, kind)
 				meta, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
 				if err != nil {
 					t.Fatal(err)
 				}
 				want, count := "needs_attention", 2
-				if kind == "user" || kind == "accepted" {
-					want, count = "idle", 0
-				}
-				if kind == "partial answer" {
+				switch kind {
+				case "user", "accepted":
+					want, count = "working", 0
+				case "partial answer":
 					count = 1
 				}
-				if meta.status() != want || meta.pendingCards != count {
-					t.Fatalf("cross-turn state=%s cards=%d, want %s/%d", meta.status(), meta.pendingCards, want, count)
+				if meta.status() != want || meta.pendingCards != count || meta.uncertainCards {
+					t.Fatalf("running turn state=%s cards=%d uncertain=%v, want %s/%d", meta.status(), meta.pendingCards, meta.uncertainCards, want, count)
 				}
-				if kind == "unanswered" {
-					snapshot["threadRuntimeStatus"] = map[string]any{"type": "active", "activeFlags": []string{}}
-					meta, err = codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
-					if err != nil || meta.status() != "needs_attention" {
-						t.Fatal("new work hid an older card", err)
-					}
+				codexTestFinishLatestTurn(snapshot)
+				meta, err = codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
+				if err != nil || meta.status() != "idle" || meta.pendingCards != 0 {
+					t.Fatalf("finished turn kept a card: state=%s cards=%d err=%v", meta.status(), meta.pendingCards, err)
 				}
 				out := string(codexTestJSON(t, (&codexTaskObserver{streams: map[string]*codexTaskStream{codexTestID1: {meta: meta, valid: true}}}).result()))
-				for _, private := range []string{"private", "older-question", "questionItemId", codexTestID1} {
+				for _, private := range []string{"private", "current-question", "questionItemId", codexTestID1} {
 					if strings.Contains(out, private) {
-						t.Fatal("cross-turn projection leaked private metadata")
+						t.Fatal("card projection leaked private metadata")
 					}
 				}
 			})
@@ -232,19 +250,23 @@ func TestCodexTaskCardsSpanTurnsAndUseAcceptedLaterReplies(t *testing.T) {
 	}
 }
 
-func TestCodexTaskCardsBeforeHistoryGapRemainUncertain(t *testing.T) {
-	for _, kind := range []string{"unanswered", "user", "accepted"} {
-		snapshot := codexTestCrossTurnSnapshot(t, true, kind)
+func TestCodexTaskRunningCardsBeforeHistoryGapRemainUncertain(t *testing.T) {
+	for _, kind := range []string{"unanswered", "user", "accepted", "finished"} {
+		reply := kind
+		if kind == "finished" {
+			reply = "unanswered"
+		}
+		snapshot := codexTestCardSnapshot(t, true, reply)
+		if kind == "finished" {
+			codexTestFinishLatestTurn(snapshot)
+		}
 		history := snapshot["turnHistory"].(map[string]any)["history"].(map[string]any)
 		history["islands"] = []any{
-			map[string]any{"newerBoundary": map[string]any{"status": "hasMore"}, "entries": []any{map[string]any{"value": "older"}}},
-			map[string]any{"newerBoundary": map[string]any{"status": "exhausted"}, "entries": []any{map[string]any{"value": "latest"}}},
+			map[string]any{"newerBoundary": map[string]any{"status": "hasMore"}, "entries": []any{map[string]any{"value": "older"}, map[string]any{"value": "latest"}}},
+			map[string]any{"newerBoundary": map[string]any{"status": "exhausted"}, "entries": []any{}},
 		}
 		meta, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false)
-		want := "idle"
-		if kind == "unanswered" {
-			want = "unknown"
-		}
+		want := map[string]string{"unanswered": "unknown", "user": "working", "accepted": "working", "finished": "idle"}[kind]
 		if err != nil || meta.status() != want {
 			t.Fatalf("gapped %s state=%s err=%v", kind, meta.status(), err)
 		}
@@ -267,38 +289,38 @@ func (conn *codexTestFollowConn) Write(frame []byte) (int, error) {
 	return len(frame), nil
 }
 
-func TestCodexTaskCrossTurnReplyPatchesRequireFreshProjection(t *testing.T) {
-	snapshot := codexTestCrossTurnSnapshot(t, true, "unanswered")
+func TestCodexTaskReplyPatchesRequireFreshProjection(t *testing.T) {
+	snapshot := codexTestCardSnapshot(t, true, "unanswered")
 	meta, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range [][]any{
-		{"turns", float64(1), "items", float64(0)},
-		{"turnHistory", "history", "entitiesByKey", "latest", "items", float64(0)},
-		{"turnHistory", "history", "entitiesByKey", "latest", "items", float64(0), "status"},
+		{"turns", float64(1), "items", float64(1)},
+		{"turnHistory", "history", "entitiesByKey", "latest", "items", float64(1)},
+		{"turnHistory", "history", "entitiesByKey", "latest", "items", float64(1), "status"},
 	} {
-		var value any = codexTestCrossTurnReply(t, "accepted")
+		var value any = codexTestCardReply(t, "accepted")
 		if path[len(path)-1] == "status" {
 			value = "accepted"
 		}
 		refresh, err := codexTaskApply(&meta, codexTaskPatch{Op: "replace", Path: path, Value: codexTestJSON(t, value)})
 		if err != nil || !refresh || meta.status() != "needs_attention" {
-			t.Fatal("cross-turn reply guessed clearing instead of requesting a snapshot", path, err)
+			t.Fatal("reply guessed clearing instead of requesting a snapshot", path, err)
 		}
 	}
-	answered := codexTestCrossTurnSnapshot(t, true, "accepted")
+	answered := codexTestCardSnapshot(t, true, "accepted")
 	stream := &codexTaskStream{owner: codexTestOwner, valid: true, revision: 5, floor: 5, meta: meta}
 	conn := &codexTestFollowConn{}
 	observer := codexTaskObserver{conn: conn, deadline: time.Now().Add(time.Second), catalog: map[string]bool{codexTestID1: true}, streams: map[string]*codexTaskStream{codexTestID1: stream}}
 	patchChange := map[string]any{"type": "patches", "revision": 6, "baseRevision": 5, "patches": []any{map[string]any{
-		"op": "replace", "path": []any{"turnHistory", "history", "entitiesByKey", "latest", "items", 0}, "value": codexTestCrossTurnReply(t, "accepted"),
+		"op": "replace", "path": []any{"turnHistory", "history", "entitiesByKey", "latest", "items", 1}, "value": codexTestCardReply(t, "accepted"),
 	}}}
 	if err := observer.stream(codexTaskMessage{SourceClientID: codexTestOwner}, codexTaskParams{ConversationID: codexTestID1, Change: codexTestJSON(t, patchChange)}); err != nil {
 		t.Fatal(err)
 	}
 	if stream.valid || !stream.waiting || observer.result().Tasks[0].Status != "unknown" || len(conn.messages) != 2 {
-		t.Fatal("cross-turn reply did not invalidate and resubscribe before clearing")
+		t.Fatal("reply did not invalidate and resubscribe before clearing")
 	}
 	for index, message := range conn.messages {
 		if message["method"] != "thread-stream-following-changed" || message["params"].(map[string]any)["following"] != (index == 1) || message["targetClientIds"].([]any)[0] != codexTestOwner {
@@ -306,8 +328,8 @@ func TestCodexTaskCrossTurnReplyPatchesRequireFreshProjection(t *testing.T) {
 		}
 	}
 	change := map[string]any{"type": "snapshot", "revision": 6, "conversationState": answered}
-	if err := observer.stream(codexTaskMessage{SourceClientID: codexTestOwner}, codexTaskParams{ConversationID: codexTestID1, Change: codexTestJSON(t, change)}); err != nil || observer.result().Tasks[0].Status != "idle" {
-		t.Fatal("fresh owner snapshot did not clear answered cross-turn cards", err)
+	if err := observer.stream(codexTaskMessage{SourceClientID: codexTestOwner}, codexTaskParams{ConversationID: codexTestID1, Change: codexTestJSON(t, change)}); err != nil || observer.result().Tasks[0].Status != "working" {
+		t.Fatal("fresh owner snapshot did not clear answered cards", err)
 	}
 }
 
@@ -528,8 +550,7 @@ func codexTestBackgroundCollection(t *testing.T, fileTimeout bool) {
 			snapshot := codexTestSnapshot("active", "inProgress")
 			snapshot["id"] = id
 			if id == codexTestID1 {
-				snapshot = codexTestSnapshot("idle", "completed")
-				snapshot["turns"] = []any{map[string]any{"status": "completed", "items": []any{map[string]any{"type": "agentMessage", "id": "native", "questions": []any{map[string]any{"question": "private question"}}}}}}
+				snapshot["turns"] = []any{map[string]any{"status": "inProgress", "items": []any{map[string]any{"type": "agentMessage", "id": "native", "questions": []any{map[string]any{"question": "private question"}}}}}}
 			}
 			return []map[string]any{{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": codexTestOwner,
 				"params": map[string]any{"conversationId": id, "hostId": "local", "change": map[string]any{"type": "snapshot", "revision": 1, "conversationState": snapshot}}}}
@@ -740,7 +761,7 @@ func TestCodexTaskHistoricalQuestionProjectionIsBounded(t *testing.T) {
 		}
 		items = append(items, map[string]any{"type": "agentMessage", "id": fmt.Sprint(index), "questions": rows})
 	}
-	snapshot["turns"] = []any{map[string]any{"status": "completed", "items": items}}
+	snapshot["turns"] = []any{map[string]any{"status": "inProgress", "items": items}}
 	if _, err := codexTaskProject(codexTestJSON(t, snapshot), codexTestID1, false); err == nil {
 		t.Fatal("unbounded question identities were accepted")
 	}

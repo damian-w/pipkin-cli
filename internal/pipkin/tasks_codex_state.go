@@ -235,8 +235,7 @@ func codexTaskTailInput(turn *codexTaskTurn) (input, plan bool) {
 	return input, plan
 }
 
-// Questions before a gap in loaded history stay uncertain unless a loaded
-// reply answers them.
+// A running turn before a gap in loaded history leaves its cards uncertain.
 func codexTaskQuestionHistory(s *codexTaskSnapshot) ([]codexTaskTurn, int, error) {
 	if s.TurnHistory.Kind != "canonical" {
 		if s.TurnHistory.Kind != "" {
@@ -273,57 +272,63 @@ func codexTaskQuestionHistory(s *codexTaskSnapshot) ([]codexTaskTurn, int, error
 	return turns, certainFrom, nil
 }
 
-// Skip/Dismiss isn't in this stream, so an unanswered card still needs attention.
+// Like the Codex app, only cards in the latest running turn count, answered
+// only from that turn. Skip/Dismiss isn't in this stream, so a skipped card
+// still needs attention until the turn ends.
 func codexTaskPendingCards(s *codexTaskSnapshot) (cards int, uncertain bool, err error) {
 	turns, certainFrom, err := codexTaskQuestionHistory(s)
 	if err != nil {
 		return 0, false, err
 	}
-	questions, answered := map[string]bool{}, map[string]bool{}
-	items := 0
-	for turnIndex := len(turns) - 1; turnIndex >= 0; turnIndex-- {
-		turn := turns[turnIndex]
-		items += len(turn.Items)
-		if items > codexTaskMaxInteractionItems {
+	turnIndex := len(turns) - 1
+	for turnIndex >= 0 && turns[turnIndex].Status != "inProgress" {
+		turnIndex--
+	}
+	if turnIndex < 0 {
+		return 0, false, nil
+	}
+	turn := turns[turnIndex]
+	if len(turn.Items) > codexTaskMaxInteractionItems {
+		return 0, false, errCodexTaskState
+	}
+	answered := map[string]bool{}
+	for _, item := range turn.Items {
+		switch item.Type {
+		case "userMessage":
+			err = codexTaskAnswers(item.Content, answered)
+		case "steeringUserMessage":
+			if item.Status == "accepted" {
+				err = codexTaskAnswers(item.Input, answered)
+			}
+		}
+		if err != nil {
+			return 0, false, err
+		}
+	}
+	questions := map[string]bool{}
+	for _, item := range turn.Items {
+		if item.Type != "agentMessage" || len(item.Questions) == 0 || bytes.Equal(bytes.TrimSpace(item.Questions), []byte("null")) {
+			continue
+		}
+		var rows []json.RawMessage
+		if json.Unmarshal(item.Questions, &rows) != nil || len(rows) > 64 || item.ID == "" || len(item.ID) > 256 {
 			return 0, false, errCodexTaskState
 		}
-		for itemIndex := len(turn.Items) - 1; itemIndex >= 0; itemIndex-- {
-			item := turn.Items[itemIndex]
-			switch item.Type {
-			case "userMessage":
-				err = codexTaskAnswers(item.Content, answered)
-			case "steeringUserMessage":
-				if item.Status == "accepted" {
-					err = codexTaskAnswers(item.Input, answered)
-				}
-			case "agentMessage":
-				if len(item.Questions) == 0 || bytes.Equal(bytes.TrimSpace(item.Questions), []byte("null")) {
-					continue
-				}
-				var rows []json.RawMessage
-				if json.Unmarshal(item.Questions, &rows) != nil || len(rows) > 64 || item.ID == "" || len(item.ID) > 256 {
-					return 0, false, errCodexTaskState
-				}
-				for index := range rows {
-					key := item.ID + "\x00" + strconv.Itoa(index)
-					if _, exists := questions[key]; exists {
-						return 0, false, errCodexTaskState
-					}
-					questions[key] = true
-					if len(questions) > codexTaskMaxQuestionKeys {
-						return 0, false, errCodexTaskState
-					}
-					if !answered[key] {
-						if turnIndex >= certainFrom {
-							cards++
-						} else {
-							uncertain = true
-						}
-					}
-				}
+		for index := range rows {
+			key := item.ID + "\x00" + strconv.Itoa(index)
+			if questions[key] {
+				return 0, false, errCodexTaskState
 			}
-			if err != nil {
-				return 0, false, err
+			questions[key] = true
+			if len(questions) > codexTaskMaxQuestionKeys {
+				return 0, false, errCodexTaskState
+			}
+			if !answered[key] {
+				if turnIndex >= certainFrom {
+					cards++
+				} else {
+					uncertain = true
+				}
 			}
 		}
 	}

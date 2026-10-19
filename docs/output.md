@@ -125,9 +125,9 @@ Treat unfamiliar `coverage` values as unavailable and unfamiliar statuses as
 
 Claude tasks come from live Claude Code sessions in Claude Desktop; Claude Chat,
 Cowork and remote sessions aren't included. Codex tasks come from recent chats
-open in the Codex app. Some background chats can be missed, internal subagent
-threads are excluded, and a dismissed question card can still show as
-`needs_attention`.
+open in the Codex app. Some background chats can be missed and internal subagent
+threads are excluded. A question card counts only while the turn that asked it
+is running, so a skipped card shows as `needs_attention` until that turn ends.
 
 While the computer is awake, the helper reads Claude tasks every 2 seconds and
 keeps a live connection to the Codex app, so changes show within a couple of
