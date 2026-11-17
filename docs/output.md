@@ -175,6 +175,7 @@ blocked counts, when they change and at least every 15 seconds. See the
 | `credits` | Object; omitted when unavailable | Codex's provider-reported credits. |
 | `reports_banked` | Boolean; emitted only when true | The reading supports reporting reset grants. |
 | `banked` | Nonnegative integer; omitted when unknown | Available reset grants; zero is a known balance. |
+| `reset_grants` | Array; omitted when empty or unavailable | Claude reset types, counts and expiration dates. |
 
 Optional objects are omitted when unavailable; readers should also tolerate null.
 Missing or null readings can occur. No missing metric should be converted to
@@ -254,6 +255,18 @@ the plan has no resets. Codex sets the flag on successful reads. Claude sets it
 when eligibility is reported, excludes expired grants and caps the sum at
 1,000,000. The USB writer caps either provider's count at 1,000,000. Neither
 credits nor reset grants have purchase or redemption controls in the CLI.
+
+### Claude reset grants
+
+| Field | Type / presence | Meaning |
+| --- | --- | --- |
+| `type` | String, always | `full`, `fable` or `unknown`. |
+| `remaining` | Positive integer, always | Resets left on this grant, capped at 1,000,000. |
+| `expires_at` | Unix seconds; omitted when unknown | Grant expiration, within `1577836800..4102444800`. |
+
+Only unexpired grants with resets left are included. Missing or invalid inventory
+omits `reset_grants`; use `reports_banked` and `banked` to distinguish an unknown
+balance from zero.
 
 ## Examples
 
@@ -342,7 +355,8 @@ Keychain permission can be resolved explicitly with `pipkin authorize`.
 
 JSON is not a USB packet. The helper sends session/weekly windows, account,
 observation time and banked resets using the [display protocol](https://github.com/damian-w/pipkin/blob/main/docs/protocol.md).
-Plan, source, models, credits, extra usage and JSON errors stay on the computer.
+Plan, source, models, credits, extra usage, reset grant details and JSON errors
+stay on the computer.
 Unknown serial keys are rejected by the firmware, so adding display metrics
 requires a coordinated protocol/firmware update. See the
 [shared packet fixture](../internal/pipkin/testdata/helper_packets.txt).

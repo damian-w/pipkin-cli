@@ -1,12 +1,14 @@
 package pipkin
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"maps"
 	"math"
 	"slices"
 	"strings"
+	"time"
 )
 
 const outputWidth = 79
@@ -142,7 +144,9 @@ func writeProviders(w io.Writer, s Status, now int64, detailed bool) error {
 			if reading.ExtraUsage != nil {
 				rows = append(rows, [2]string{"Extra usage", outputExtraUsage(reading.ExtraUsage)})
 			}
-			if reading.ReportsBanked || reading.Banked != nil {
+			if len(reading.ResetGrants) > 0 {
+				rows = append(rows, outputResetGrants(reading.ResetGrants, time.Unix(now, 0))...)
+			} else if reading.ReportsBanked || reading.Banked != nil {
 				value := "Unknown"
 				if reading.Banked != nil && *reading.Banked >= 0 {
 					value = fmt.Sprint(*reading.Banked)
@@ -179,7 +183,66 @@ func outputCalmSignOut(message string) bool {
 
 func outputHasReading(reading *Reading) bool {
 	return reading != nil && (reading.SessionNoCap || reading.Session != nil || reading.Weekly != nil ||
-		len(reading.Models) > 0 || reading.Credits != nil || reading.ExtraUsage != nil || reading.ReportsBanked || reading.Banked != nil)
+		len(reading.Models) > 0 || reading.Credits != nil || reading.ExtraUsage != nil ||
+		reading.ReportsBanked || reading.Banked != nil || len(reading.ResetGrants) > 0)
+}
+
+// outputResetGrants groups grants by type and expiration without changing the reading.
+func outputResetGrants(grants []ResetGrant, now time.Time) [][2]string {
+	type group struct {
+		kind   int
+		expiry int64
+	}
+	counts := make(map[group]int64)
+	for _, grant := range grants {
+		kind := 2
+		switch grant.Type {
+		case "full":
+			kind = 0
+		case "fable":
+			kind = 1
+		}
+		key := group{kind, validEpoch(float64(grant.ExpiresAt))}
+		if grant.Remaining < 0 || counts[key] < 0 {
+			counts[key] = -1
+		} else {
+			counts[key] = min(maxBanked, counts[key]+min(grant.Remaining, maxBanked))
+		}
+	}
+	keys := slices.Collect(maps.Keys(counts))
+	slices.SortFunc(keys, func(a, b group) int {
+		if order := cmp.Compare(a.kind, b.kind); order != 0 {
+			return order
+		}
+		// Put unknown expiration dates after known ones within each type.
+		left, right := a.expiry, b.expiry
+		if left == 0 {
+			left = lastEpoch + 1
+		}
+		if right == 0 {
+			right = lastEpoch + 1
+		}
+		return cmp.Compare(left, right)
+	})
+	labels := []string{"Full resets", "Fable resets", "Resets (unknown type)"}
+	var rows [][2]string
+	for _, key := range keys {
+		value := "Unknown"
+		if counts[key] >= 0 {
+			value = fmt.Sprint(counts[key])
+		}
+		if key.expiry == 0 {
+			value += "  expiry unknown"
+		} else {
+			action := "expires"
+			if key.expiry <= now.Unix() {
+				action = "expired"
+			}
+			value += "  " + action + " " + time.Unix(key.expiry, 0).In(now.Location()).Format("2 Jan 2006, 15:04 GMT-07:00")
+		}
+		rows = append(rows, [2]string{labels[key.kind], value})
+	}
+	return rows
 }
 
 func outputWindow(window *Window, now int64) string {

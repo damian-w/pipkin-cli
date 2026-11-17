@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -132,6 +133,21 @@ func claudeReset(value string) int64 {
 	return validEpoch(float64(parsed.Unix()))
 }
 
+func claudeResetType(givesBackWeekly, clears json.RawMessage) string {
+	var givesBack *bool
+	if json.Unmarshal(givesBackWeekly, &givesBack) != nil || givesBack == nil {
+		return "unknown"
+	}
+	if *givesBack {
+		return "fable"
+	}
+	var limits []string
+	if json.Unmarshal(clears, &limits) == nil && slices.Contains(limits, "five_hour") && slices.Contains(limits, "seven_day") {
+		return "full"
+	}
+	return "unknown"
+}
+
 func parseClaudeUsage(raw []byte, now time.Time) (*Reading, error) {
 	var payload map[string]json.RawMessage
 	if json.Unmarshal(raw, &payload) != nil {
@@ -192,11 +208,15 @@ func parseClaudeUsage(raw []byte, now time.Time) (*Reading, error) {
 		Grants   *[]struct {
 			Left   *int64 `json:"resets_left"`
 			EndsAt string `json:"ends_at"`
+			// Unknown type metadata must not invalidate a legacy reset balance.
+			GivesBackWeekly json.RawMessage `json:"gives_back_weekly"`
+			Clears          json.RawMessage `json:"clears"`
 		} `json:"grants"`
 	}
 	if json.Unmarshal(payload["cedar_ember"], &resets) == nil && resets != nil && resets.Eligible != nil {
 		r.ReportsBanked = true
 		var count int64
+		var grants []ResetGrant
 		known := !*resets.Eligible || resets.Grants != nil
 		if *resets.Eligible && resets.Grants != nil {
 			for _, grant := range *resets.Grants {
@@ -206,12 +226,16 @@ func parseClaudeUsage(raw []byte, now time.Time) (*Reading, error) {
 					continue
 				}
 				if *grant.Left > 0 && (expiry == 0 || expiry > now.Unix()) {
-					count = min(maxBanked, count+min(*grant.Left, maxBanked))
+					remaining := min(*grant.Left, maxBanked)
+					count = min(maxBanked, count+remaining)
+					grants = append(grants, ResetGrant{Type: claudeResetType(grant.GivesBackWeekly, grant.Clears),
+						Remaining: remaining, ExpiresAt: expiry})
 				}
 			}
 		}
 		if known {
 			r.Banked = &count
+			r.ResetGrants = grants
 		}
 	}
 	if r.Session == nil && r.Weekly == nil && len(r.Models) == 0 && r.ExtraUsage == nil && !r.ReportsBanked {

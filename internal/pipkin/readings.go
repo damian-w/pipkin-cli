@@ -22,6 +22,13 @@ type Window struct {
 	NotStarted bool  `json:"not_started,omitempty"`
 }
 
+// ResetGrant records an available Claude reset's type, count and expiration.
+type ResetGrant struct {
+	Type      string `json:"type"`
+	Remaining int64  `json:"remaining"`
+	ExpiresAt int64  `json:"expires_at,omitempty"`
+}
+
 type Reading struct {
 	Source     string             `json:"source,omitempty"`
 	Plan       string             `json:"plan,omitempty"`
@@ -37,6 +44,8 @@ type Reading struct {
 	// ReportsBanked distinguishes an unknown balance (sent as null) from a source without one.
 	ReportsBanked bool   `json:"reports_banked,omitempty"`
 	Banked        *int64 `json:"banked,omitempty"`
+	// ResetGrants is CLI/JSON detail; USB uses the combined Banked count.
+	ResetGrants []ResetGrant `json:"reset_grants,omitempty"`
 }
 
 // accountDigest identifies an account to the display without revealing it.

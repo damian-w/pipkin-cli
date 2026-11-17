@@ -88,9 +88,10 @@ diagnostic log in `~/Library/Application Support/Pipkin` on macOS,
 can override this location; Linux also respects `XDG_DATA_HOME`.
 
 Snapshots can include plan, allowance and model limits, reading and reset times,
-banked resets, the hashed account reference and other provider-reported usage
-details, plus task statuses, saved when they change and at least every 15 seconds. Raw provider
-responses are not saved. Logs can include diagnostic errors, local file paths and
+banked resets and their types and expiration dates, the hashed account reference
+and other provider-reported usage details, plus task statuses, saved when they
+change and at least every 15 seconds. Raw provider responses are not saved.
+Logs can include diagnostic errors, local file paths and
 display connection details. Each snapshot replaces the previous one, and the log
 rotates as it grows. Pipkin does not upload or cloud-sync
 these files; they remain until removed.
